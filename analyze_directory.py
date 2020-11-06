@@ -11,7 +11,7 @@ ap.add_argument("-v", "--verbose", help="This argument turns debugging prints on
 args = vars(ap.parse_args())
 
 #============================= DEFINE GLOBALS =============================
-VERBOSE = False
+
 DEFAULT_JSON_WRITE_INDENT = 4
 DEFAULT_DIRECTORY_TEMPLATE = {
     "os": "[windows/linux]",
@@ -26,13 +26,10 @@ DEFAULT_DIRECTORY_TEMPLATE = {
 
 
 def analyzeArgs(args):
-    if args["verbose"] is not None:
-        print("Turning verbose on..")
-        VERBOSE = True
     if args["new"] is not None:
         createConfig(args["new"])
         return
-    if args["execute"] is not None:
+    elif args["execute"] is not None:
         print(f"Executing {execute}")
     else:
         print("Error: Create a file, or execute one already created.")
@@ -41,11 +38,13 @@ def createConfig(fileName):
     init_directory_template = [DEFAULT_DIRECTORY_TEMPLATE]
 
     # convert into JSON:
-    if VERBOSE:
+    if isVerbose():
         print(f"Writing Default Config to file '{fileName}'")
     f = open(fileName, "w")
     f.write(json.dumps(init_directory_template, indent=DEFAULT_JSON_WRITE_INDENT))
     f.close()
 
+def isVerbose():
+    return args["verbose"].lower() == "true" or  args["verbose"].lower() == "t" or  args["verbose"].lower() == "1" or  args["verbose"].lower() == "on" or  args["verbose"].lower() == "enabled"
 
 analyzeArgs(args)
