@@ -1,2 +1,2 @@
-# DirectoryTools
+# directorytools
 Tools comparing directories
