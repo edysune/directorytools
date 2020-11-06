@@ -27,5 +27,19 @@ def analyzeArgs(args):
 
 def createConfig(fileName):
     print(f"Creating Config File... {fileName}")
+    
+    init_directory_template = [{
+        "directory": "",
+        "type": "[local|remote]",
+        "username": "<only remote - not needed for local usage>",
+        "password": "<only remote - not needed for local usage>",
+        "filesize": "[b|kb|gb]"
+    }]
+
+    # convert into JSON:
+    f = open(fileName, "w")
+    f.write(json.dumps(init_directory_template, indent=4))
+    f.close()
+
 
 analyzeArgs(args)
