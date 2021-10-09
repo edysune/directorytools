@@ -214,16 +214,62 @@ class file:
         return printedFile
 
 
+class folderStructure:
+    def __init__(self):
+        self.folders = dict()
+    
+    def addFile(self, file):
+        if self.folders.get(file.getPath()) == None:
+            self.folders[file.getPath()] = {
+                "path": file.getPath(),
+                "absPath": file.getAbsFileName(),
+                "comparablePath": file.getCompPath(),
+                "size": file.size,
+                "files": 1,
+            }
+        else:
+            self.folders[file.getPath()].size += file.size
+            self.folders[file.getPath()].files += 1
+
+    def printFolders(self):
+        for key in self.folders.keys():
+            tabChr = '\t'
+            printedFile = f'{tabChr * self.tab}{key}\t{self.folders[key].path} ({self.folders[key].files} - {self.folders[key].size})'
+            print(f"{printedFile}")
+
+    def writeFolders(self, fileName = "output.json"):
+        allFiles = []
+        for key in self.folders.keys():
+            allFiles.append({
+                "path": self.folders[key].path,
+                "absPath": self.folders[key].absPath,
+                "comparablePath": self.folders[key].comparablePath,
+                "size": self.folders[key].path.size,
+                "files": self.folders[key].path.files,
+            })
+
+        f = open(fileName, "w")
+        f.write(json.dumps(allFiles, indent=4, sort_keys=True))
+        f.close()
+
+
+
 #============================= DRIVER START =============================
 
+
+# todo: create a folderStruct, pass it through
+# todo: create logic around printing and add a possible argparse
 def searchDirectory(currentDir, root, fStruct, tab):
     for fname in os.listdir(currentDir):
         #print(nextFile)
         nextFile = os.path.join(currentDir, fname)
         if os.path.isdir(nextFile):
             searchDirectory(nextFile, root, fStruct, tab + 1)
+            # todo: grab result and combine it with current directory
         elif os.path.isfile(nextFile):
             fStruct.addFile(file(currentDir, fname, root, tab))
+            # todo: get next file and combine it with current directory
+
 
 
 #parse all arguments into pre-defined variables
