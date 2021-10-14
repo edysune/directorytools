@@ -9,7 +9,7 @@ import argparse
 #============================= DEFINE DEFAULT AND GLOBAL VARIABLES =============================
 # set and initialize variables used throughout the rest of the program
 default_debugger = True
-default_quieter = False
+default_quieter = True
 default_output_folder = 'output.comp.json'
 
 #============================= DEFINE ARGPARSE =============================
@@ -76,6 +76,24 @@ def parseDebug(args):
         return default_debugger
 
 
+#============================= SUPPLEMENTAL CLASSES =============================
+
+class FileComparableObj:
+    def __init__(self, jsonData):
+        self.comparablePath = jsonData['comparablePath']
+        self.size = jsonData['size']
+
+    def print(self):
+        print(f"{self.comparablePath}\t{self.size}")
+
+class DirectoryComparableObj:
+    def __init__(self, jsonData):
+        self.comparablePath = jsonData['comparablePath']
+        self.files = jsonData['files']
+        self.size = jsonData['size']
+    
+    def print(self):
+        print(f"{self.comparablePath}\t{self.files}\t{self.size}")
 
 #============================= DRIVER START =============================
 
@@ -83,11 +101,48 @@ def printHelper(shouldPrint, msg):
     if shouldPrint:
         print(msg)
 
+def loadJsonFile(file):
+    f = open(file,)
+    data = json.load(f)
+
+    res = []
+    fileType = data['type'].lower()
+
+    if fileType != "file" and fileType != "folder":
+        print(f"ERROR - file type {fileType} is neither file nor folder. Exiting program..")
+        exit()
+
+    for file in data['files']:
+        if fileType == "file":
+            res.append(FileComparableObj(file))
+        else:
+            res.append(DirectoryComparableObj(file))
+    return fileType, res
 
 # parse all arguments into pre-defined variables
 tinput, toutput, tdebug = parseAllArgs(args)
 
 printHelper(tdebug, 'Starting Program..')
+
+ftype1, files1 = loadJsonFile(tinput[0])
+ftype2, files2 = loadJsonFile(tinput[1])
+
+if tdebug:
+    print(f"First File Type: {ftype1}\nContents:")
+    for e in files1:
+        e.print()
+    print("------------------------------------")
+    print(f"Second File Type: {ftype2}\nContents:")
+    print(ftype2)
+    for e in files2:
+        e.print()
+
+#check matching types
+
+#Compare 1 to 2
+#Compare 2 to 1
+
+
 
 printHelper(tdebug, 'Program Finished')
 

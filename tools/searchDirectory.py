@@ -210,14 +210,16 @@ class fileStructure:
                 retString += f.printFile()
 
     def writeFiles(self, fileName = "output.json"):
+        outerWrapper = {"type": "file"}
         allFiles = []
-        allFiles.append({"type": "file"})
         for key in self.files.keys():
             for f in self.files[key]:
                 allFiles.append(f.getFile())
 
+        outerWrapper["files"] = allFiles
+
         f = open(fileName, "w")
-        f.write(json.dumps(allFiles, indent=4, sort_keys=True))
+        f.write(json.dumps(outerWrapper, indent=4, sort_keys=True))
         f.close()
 
 class folderStructure:
@@ -244,8 +246,9 @@ class folderStructure:
             return f'{tabChr * self.folders[key]["tab"]}{key}\t{self.folders[key]["path"]} ({self.folders[key]["files"]} - {getSize(self.folders[key]["size"], globalSizeConversion)})'
 
     def writeFolders(self, fileName = "output.json"):
+        outerWrapper = {"type": "folder"}
+
         allFiles = []
-        allFiles.append({"type": "folder"})
         for key in self.folders.keys():
             allFiles.append({
                 "path": self.folders[key]["path"],
@@ -255,8 +258,10 @@ class folderStructure:
                 "files": self.folders[key]["files"],
             })
 
+        outerWrapper["files"] = allFiles
+
         f = open(fileName, "w")
-        f.write(json.dumps(allFiles, indent=4, sort_keys=True))
+        f.write(json.dumps(outerWrapper, indent=4, sort_keys=True))
         f.close()
 
 class file:
