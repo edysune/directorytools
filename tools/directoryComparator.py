@@ -11,6 +11,7 @@ import argparse
 default_debugger = True
 default_quieter = True
 default_output_folder = 'output.comp.json'
+validTypes = ["folder", "file"]
 
 #============================= DEFINE ARGPARSE =============================
 # construct the argument parser
@@ -81,19 +82,29 @@ def parseDebug(args):
 class FileComparableObj:
     def __init__(self, jsonData):
         self.comparablePath = jsonData['comparablePath']
+        self.path = jsonData['path']
         self.size = jsonData['size']
+        self.files = jsonData["files"] if "files" in jsonData else -1
+
+    def hasFiles(self):
+        return False if self.files == -1 else True
+
+    def getFiles(self):
+        return self.files
+
+    def getSize(self):
+        return self.size
+
+    def getPath(self):
+        return self.path
+
+    def getComparablePath(self):
+        return self.comparablePath
 
     def print(self):
-        print(f"{self.comparablePath}\t{self.size}")
-
-class DirectoryComparableObj:
-    def __init__(self, jsonData):
-        self.comparablePath = jsonData['comparablePath']
-        self.files = jsonData['files']
-        self.size = jsonData['size']
-    
-    def print(self):
-        print(f"{self.comparablePath}\t{self.files}\t{self.size}")
+        files = '' if self.getFiles() == -1 else f"{self.getFiles()}"
+        print(f"{self.getComparablePath()}\t{files}\t{self.getSize()}")
+        
 
 #============================= DRIVER START =============================
 
@@ -113,11 +124,43 @@ def loadJsonFile(file):
         exit()
 
     for file in data['files']:
-        if fileType == "file":
-            res.append(FileComparableObj(file))
-        else:
-            res.append(DirectoryComparableObj(file))
+        res.append(FileComparableObj(file))
     return fileType, res
+
+def enforceFileType(ftype1, ftype2, tinput):
+    if ftype1 != ftype2:
+        print(f"File type {ftype1} from {tinput[0]} does not match {ftype2} from {tinput[1]} . Program exiting...")
+        exit()
+    if ftype1 not in validTypes:
+        print(f"File type {ftype1} from {tinput[0]} is not valid. Program exiting...")
+        exit()
+    if ftype2 not in validTypes:
+        print(f"File type {ftype2} from {tinput[1]} is not valid. Program exiting...")
+        exit()
+
+def isMatch(a, b):
+    #if A has a comparable match in any of the B, it passed
+    # Comparable matches include:
+    #   1. path must match 
+    #   2. comparablePath must match
+    #   3. size must match
+    #   4. if has files, it must also match exactly
+    if a.getPath() != b.getPath():
+        return False
+    if a.getComparablePath() != b.getComparablePath():
+        return False
+    if a.getSize() != b.getSize():
+        return False
+    if a.hasFiles() and b.hasFiles() and a.getFiles() != b.getFiles():
+        return False
+    return True
+
+def findDifferences(filesA, filesB):
+    diffs = []
+    for a in filesA:
+        if not any(isMatch(a, b) for b in filesB):
+            diffs.append(a)
+    return diffs
 
 # parse all arguments into pre-defined variables
 tinput, toutput, tdebug = parseAllArgs(args)
@@ -128,21 +171,38 @@ ftype1, files1 = loadJsonFile(tinput[0])
 ftype2, files2 = loadJsonFile(tinput[1])
 
 if tdebug:
-    print(f"First File Type: {ftype1}\nContents:")
+    print(f"\nFirst File Type: {ftype1}\nContents:")
     for e in files1:
         e.print()
     print("------------------------------------")
     print(f"Second File Type: {ftype2}\nContents:")
-    print(ftype2)
     for e in files2:
         e.print()
 
 #check matching types
+enforceFileType(ftype1, ftype2, tinput)
 
-#Compare 1 to 2
-#Compare 2 to 1
+#Compare a to b
+#Compare b to a
+diffAToB = findDifferences(files1, files2)
+diffBToA = findDifferences(files2, files1)
 
+if tdebug:
+    if(len(diffAToB) > 0):
+        print(f"\nFiles in {tinput[0]} that has no matches:")
+        for diff in diffAToB:
+            print(f'\t{diff.print()}')
+    else:
+        print(f"\nFiles in {tinput[0]} are matched perfectly.")
+    print("------------------------------------")
+    if(len(diffBToA) > 0):
+        print(f"\nFiles in {tinput[1]} that has no matches:")
+        for diff in diffBToA:
+            print(f'\t{diff.print()}')
+    else:
+        print(f"\nFiles in {tinput[1]} are matched perfectly.")
 
+#output results
 
 printHelper(tdebug, 'Program Finished')
 
