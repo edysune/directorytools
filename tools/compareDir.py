@@ -1,23 +1,24 @@
-#directoryComparator.py
+#compareDir.py
+# script that compares 2 directories against each other
 
 import json 
 import os
 import argparse
 
-# 2) Compare 2 directories against each other
-
 #============================= DEFINE DEFAULT AND GLOBAL VARIABLES =============================
 # set and initialize variables used throughout the rest of the program
-default_debugger = True
-default_quieter = True
-default_output_folder = 'output.comp.json'
+printLoadedFiles = False
+debugMatches = False
+defaultDebugger = True
+defaultQuieter = True
+defaultOutputFolder = 'output.comp.json'
 validTypes = ["folder", "file"]
 
 #============================= DEFINE ARGPARSE =============================
 # construct the argument parser
 ap = argparse.ArgumentParser()
 ap.add_argument("-i", "--input", help="file name and paths to 2 input files to compare with each other. Files must match in terms of content type (folders, files, etc).", nargs=2)
-ap.add_argument("-o", "--output", help=f"path and filename of output json file created. Defaults to {default_output_folder}.")
+ap.add_argument("-o", "--output", help=f"path and filename of output json file created. Defaults to {defaultOutputFolder}.")
 ap.add_argument("-d", "--debug", help="true/false or t/f supported. This argument turns debugging prints on/off, which gives slightly more information about program as it runs.")
 args = vars(ap.parse_args())
 
@@ -54,7 +55,7 @@ def parseInput(args) :
 #   toutput     an output file name. Program uses default json output file if not defined
 def parseOutputFile(args):
     if args["output"] is None:
-        return default_output_folder
+        return defaultOutputFolder
     return args["output"]
 
 #Preconditions: None
@@ -65,7 +66,7 @@ def parseOutputFile(args):
 #   tdebug     a folder path. Program uses default json output file if not defined
 def parseDebug(args):
     if args["debug"] is None:
-        return default_debugger
+        return defaultDebugger
 
     tdebug = args["debug"].lower()
     if tdebug == "true" or tdebug == "t":
@@ -73,8 +74,8 @@ def parseDebug(args):
     elif tdebug == "false" or tdebug == "f":
         return False
     else:
-        print(f"Error: debug argument {tdebug} not true/false or t/f - defaulting to {default_debugger}")
-        return default_debugger
+        print(f"Error: debug argument {tdebug} not true/false or t/f - defaulting to {defaultDebugger}")
+        return defaultDebugger
 
 
 #============================= SUPPLEMENTAL CLASSES =============================
@@ -146,12 +147,22 @@ def isMatch(a, b):
     #   3. size must match
     #   4. if has files, it must also match exactly
     if a.getPath() != b.getPath():
+        if debugMatches:
+            print(f"isMatch(): {a.getPath()} != {b.getPath()}")
         return False
     if a.getComparablePath() != b.getComparablePath():
+        if debugMatches:
+            print(f"isMatch(): {a.getComparablePath()} != {b.getComparablePath()}")
         return False
     if a.getSize() != b.getSize():
+        if debugMatches:
+            print(f"isMatch(): {a.getSize()} != {b.getSize()}")
         return False
     if a.hasFiles() and b.hasFiles() and a.getFiles() != b.getFiles():
+        if debugMatches:
+            print(f"isMatch(): hasFiles: {a.hasFiles()} | {b.hasFiles()}")
+            if a.hasFiles() and b.hasFiles():
+                print(f"isMatch(): getFiles: {a.getFiles()} != {b.getFiles()}")
         return False
     return True
 
@@ -162,6 +173,24 @@ def findDifferences(filesA, filesB):
             diffs.append(a)
     return diffs
 
+def printResults(tdebug, tinput, diffAToB, diffBToA):
+    if tdebug:
+        if(len(diffAToB) > 0):
+            print(f"Files in {tinput[0]} have {len(diffAToB)} differences")
+        else:
+            print(f"Files in {tinput[0]} are matched perfectly.")
+        if(len(diffBToA) > 0):
+            print(f"Files in {tinput[1]} have {len(diffBToA)} differences")
+        else:
+            print(f"Files in {tinput[1]} are matched perfectly.")
+
+def printLoad(fileName, ftype, files):
+    if tdebug:
+        print(f"{fileName} loaded {len(files)} items as {ftype}.")  
+        if printLoadedFiles:
+            for e in files:
+                e.print()      
+
 # parse all arguments into pre-defined variables
 tinput, toutput, tdebug = parseAllArgs(args)
 
@@ -170,14 +199,8 @@ printHelper(tdebug, 'Starting Program..')
 ftype1, files1 = loadJsonFile(tinput[0])
 ftype2, files2 = loadJsonFile(tinput[1])
 
-if tdebug:
-    print(f"\nFirst File Type: {ftype1}\nContents:")
-    for e in files1:
-        e.print()
-    print("------------------------------------")
-    print(f"Second File Type: {ftype2}\nContents:")
-    for e in files2:
-        e.print()
+printLoad(tinput[0], ftype1, files1)
+printLoad(tinput[1], ftype2, files2)
 
 #check matching types
 enforceFileType(ftype1, ftype2, tinput)
@@ -187,24 +210,8 @@ enforceFileType(ftype1, ftype2, tinput)
 diffAToB = findDifferences(files1, files2)
 diffBToA = findDifferences(files2, files1)
 
-if tdebug:
-    if(len(diffAToB) > 0):
-        print(f"\nFiles in {tinput[0]} that has no matches:")
-        for diff in diffAToB:
-            print(f'\t{diff.print()}')
-    else:
-        print(f"\nFiles in {tinput[0]} are matched perfectly.")
-    print("------------------------------------")
-    if(len(diffBToA) > 0):
-        print(f"\nFiles in {tinput[1]} that has no matches:")
-        for diff in diffBToA:
-            print(f'\t{diff.print()}')
-    else:
-        print(f"\nFiles in {tinput[1]} are matched perfectly.")
-
-#output results
+printResults(tdebug, tinput, diffAToB, diffBToA)
 
 printHelper(tdebug, 'Program Finished')
-
 
 exit()

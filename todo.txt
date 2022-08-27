@@ -1,0 +1,7 @@
+Features:
+-Fix Comparator
+  -Folders
+  -Files
+
+Bugs:
+-folder.output.json is outputting file names, and does not need a comparable file
