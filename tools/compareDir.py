@@ -102,6 +102,16 @@ class FileComparableObj:
     def getComparablePath(self):
         return self.comparablePath
 
+    def isFileIn(file, files):
+        return any(FileComparableObj.isSameFile(nextFile, file) for nextFile in files)
+
+    def isSameFile(file1, file2):
+        if file1.getComparablePath() != file2.getComparablePath():
+            return False
+        if file1.getSize() != file2.getSize():
+            return False
+        return True
+
     def print(self):
         files = '' if self.getFiles() == -1 else f"{self.getFiles()}"
         print(f"{self.getComparablePath()}\t{files}\t{self.getSize()}")
@@ -139,50 +149,25 @@ def enforceFileType(ftype1, ftype2, tinput):
         print(f"File type {ftype2} from {tinput[1]} is not valid. Program exiting...")
         exit()
 
-def isMatch(a, b):
-    #if A has a comparable match in any of the B, it passed
-    # Comparable matches include:
-    #   1. path must match 
-    #   2. comparablePath must match
-    #   3. size must match
-    #   4. if has files, it must also match exactly
-    if a.getPath() != b.getPath():
-        if debugMatches:
-            print(f"isMatch(): {a.getPath()} != {b.getPath()}")
-        return False
-    if a.getComparablePath() != b.getComparablePath():
-        if debugMatches:
-            print(f"isMatch(): {a.getComparablePath()} != {b.getComparablePath()}")
-        return False
-    if a.getSize() != b.getSize():
-        if debugMatches:
-            print(f"isMatch(): {a.getSize()} != {b.getSize()}")
-        return False
-    if a.hasFiles() and b.hasFiles() and a.getFiles() != b.getFiles():
-        if debugMatches:
-            print(f"isMatch(): hasFiles: {a.hasFiles()} | {b.hasFiles()}")
-            if a.hasFiles() and b.hasFiles():
-                print(f"isMatch(): getFiles: {a.getFiles()} != {b.getFiles()}")
-        return False
-    return True
-
 def findDifferences(filesA, filesB):
     diffs = []
+    
     for a in filesA:
-        if not any(isMatch(a, b) for b in filesB):
+        if not FileComparableObj.isFileIn(a, filesB):
             diffs.append(a)
+
     return diffs
 
 def printResults(tdebug, tinput, diffAToB, diffBToA):
     if tdebug:
         if(len(diffAToB) > 0):
-            print(f"Files in {tinput[0]} have {len(diffAToB)} differences")
+            print(f"Files in {tinput[0]} => {tinput[1]} have {len(diffAToB)} differences")
         else:
-            print(f"Files in {tinput[0]} are matched perfectly.")
+            print(f"Files in {tinput[0]} => {tinput[1]} are matched perfectly.")
         if(len(diffBToA) > 0):
-            print(f"Files in {tinput[1]} have {len(diffBToA)} differences")
+            print(f"Files in {tinput[1]} => {tinput[0]} have {len(diffBToA)} differences")
         else:
-            print(f"Files in {tinput[1]} are matched perfectly.")
+            print(f"Files in {tinput[1]} => {tinput[0]} are matched perfectly.")
 
 def printLoad(fileName, ftype, files):
     if tdebug:
