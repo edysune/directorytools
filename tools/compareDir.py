@@ -176,6 +176,22 @@ def printLoad(fileName, ftype, files):
             for e in files:
                 e.print()      
 
+def generateFileDiff(diffRoot, diffList):
+    diffWrapper = {"rootDirectory": diffRoot}
+    diffWrapper["files"] = diffList
+    return diffWrapper
+
+def writeFileDiff(diffRootA, diffListA, diffRootB, diffListB, fileName):
+    fout = {}
+    fout[diffRootA] = generateFileDiff(diffRootA, diffListA)
+    fout[diffRootB] = generateFileDiff(diffRootB, diffListB)
+
+    f = open(fileName, "w")
+    f.write(json.dumps(fout, indent=4, sort_keys=True))
+    f.close()
+
+
+
 # parse all arguments into pre-defined variables
 tinput, toutput, tdebug = parseAllArgs(args)
 
@@ -194,6 +210,8 @@ enforceFileType(ftype1, ftype2, tinput)
 #Compare b to a
 diffAToB = findDifferences(files1, files2)
 diffBToA = findDifferences(files2, files1)
+
+writeFileDiff(tinput[0], diffAToB, tinput[1], diffBToA, toutput)
 
 printResults(tdebug, tinput, diffAToB, diffBToA)
 
