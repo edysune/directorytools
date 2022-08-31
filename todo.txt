@@ -1,6 +1,7 @@
 Features:
 -Fix Comparator
   -Folders
+  -paths instead of file names for metadata and printing
 
 Refactoring:
 -major refactoring needed across all of program
