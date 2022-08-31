@@ -82,9 +82,11 @@ def parseDebug(args):
 
 class FileComparableObj:
     def __init__(self, jsonData):
-        self.comparablePath = jsonData['comparablePath']
-        self.path = jsonData['path']
-        self.size = jsonData['size']
+        self.comparablePath = jsonData['comparablePath'] if "comparablePath" in jsonData else "N/A"
+        self.path = jsonData['path'] if "path" in jsonData else "N/A"
+        self.absPath = jsonData['absPath'] if "absPath" in jsonData else "N/A"
+        self.size = jsonData['size'] if "size" in jsonData else "N/A"
+        self.fileName = jsonData['fileName'] if "fileName" in jsonData else "N/A"
         self.files = jsonData["files"] if "files" in jsonData else -1
 
     def hasFiles(self):
@@ -96,11 +98,26 @@ class FileComparableObj:
     def getSize(self):
         return self.size
 
+    def getAbsPath(self):
+        return self.absPath
+
     def getPath(self):
         return self.path
 
     def getComparablePath(self):
         return self.comparablePath
+
+    def getFileName(self):
+        return self.fileName
+
+    def getJSON(self):
+        return {
+            "fileName": self.getFileName(),
+            "size": self.getSize(),
+            "absPath": self.getAbsPath(),
+            "path": self.getPath(),
+            "comparablePath": self.getComparablePath(),
+        }
 
     def isFileIn(file, files):
         return any(FileComparableObj.isSameFile(nextFile, file) for nextFile in files)
@@ -176,21 +193,33 @@ def printLoad(fileName, ftype, files):
             for e in files:
                 e.print()      
 
-def generateFileDiff(diffRoot, diffList):
-    diffWrapper = {"rootDirectory": diffRoot}
-    diffWrapper["files"] = diffList
-    return diffWrapper
+def generateFileDiff(diffList):
+    convertedFiles = []
+    for file in diffList:
+        # todo: go through each and add another field in JSON that explains why there is a difference
+        convertedFiles.append(file.getJSON())
+
+    return convertedFiles
+
+def generateMetadata(diffRootA, diffListA, diffRootB, diffListB):
+    # todo: diffRoot's are the jsonfile, not the actual path. Will probably need this.
+    return {
+        "insertPath": diffRootA,
+        "insertFilesNum": len(diffListA),
+        "deletePath": diffRootB,
+        "deleteFilesNum": len(diffListB),
+    }
 
 def writeFileDiff(diffRootA, diffListA, diffRootB, diffListB, fileName):
     fout = {}
-    fout[diffRootA] = generateFileDiff(diffRootA, diffListA)
-    fout[diffRootB] = generateFileDiff(diffRootB, diffListB)
+    fout["metadata"] = generateMetadata(diffRootA, diffListA, diffRootB, diffListB)
+    # todo: diffRoot's are the jsonfile, not the actual path. Will probably need this.
+    fout[diffRootA] = generateFileDiff(diffListA)
+    fout[diffRootB] = generateFileDiff(diffListB)
 
     f = open(fileName, "w")
     f.write(json.dumps(fout, indent=4, sort_keys=True))
     f.close()
-
-
 
 # parse all arguments into pre-defined variables
 tinput, toutput, tdebug = parseAllArgs(args)
