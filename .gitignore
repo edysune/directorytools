@@ -1,0 +1,2 @@
+# ignore ALL json files in tools
+tools/*.json

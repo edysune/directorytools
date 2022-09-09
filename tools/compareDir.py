@@ -81,13 +81,21 @@ def parseDebug(args):
 #============================= SUPPLEMENTAL CLASSES =============================
 
 class FileComparableObj:
-    def __init__(self, jsonData):
-        self.comparablePath = jsonData['comparablePath'] if "comparablePath" in jsonData else "N/A"
-        self.path = jsonData['path'] if "path" in jsonData else "N/A"
-        self.absPath = jsonData['absPath'] if "absPath" in jsonData else "N/A"
-        self.size = jsonData['size'] if "size" in jsonData else "N/A"
-        self.fileName = jsonData['fileName'] if "fileName" in jsonData else "N/A"
-        self.files = jsonData["files"] if "files" in jsonData else -1
+    def __init__(self, jsonData, fileType):
+        self.fileType = fileType
+
+        if self.fileType == "file":
+            self.comparablePath = jsonData['comparablePath'] if "comparablePath" in jsonData else "N/A"
+            self.path = jsonData['path'] if "path" in jsonData else "N/A"
+            self.absPath = jsonData['absPath'] if "absPath" in jsonData else "N/A"
+            self.size = jsonData['size'] if "size" in jsonData else "N/A"
+            self.fileName = jsonData['fileName'] if "fileName" in jsonData else "N/A"
+        elif self.fileType == "folder":
+            self.comparablePath = jsonData['comparablePath'] if "comparablePath" in jsonData else "N/A"
+            self.path = jsonData['path'] if "path" in jsonData else "N/A"
+            self.absPath = jsonData['absPath'] if "absPath" in jsonData else "N/A"
+            self.size = jsonData['size'] if "size" in jsonData else "N/A"
+            self.files = jsonData["files"] if "files" in jsonData else -1
 
     def hasFiles(self):
         return False if self.files == -1 else True
@@ -109,25 +117,51 @@ class FileComparableObj:
 
     def getFileName(self):
         return self.fileName
+   
+    def getFileType(self):
+        return self.fileType
 
     def getJSON(self):
+        if self.getFileType() == "file":     
+            return {
+                "fileName": self.getFileName(),
+                "size": self.getSize(),
+                "absPath": self.getAbsPath(),
+                "path": self.getPath(),
+                "comparablePath": self.getComparablePath(),
+                "type": self.getFileType(),
+            }
+        if self.getFileType() == "folder":     
+            return {
+                "files": self.getFiles(),
+                "size": self.getSize(),
+                "absPath": self.getAbsPath(),
+                "path": self.getPath(),
+                "comparablePath": self.getComparablePath(),
+                "type": self.getFileType(),
+            }
         return {
-            "fileName": self.getFileName(),
-            "size": self.getSize(),
-            "absPath": self.getAbsPath(),
-            "path": self.getPath(),
-            "comparablePath": self.getComparablePath(),
+            "error" : self.getFileType() + " is an invalid file type"
         }
 
-    def isFileIn(file, files):
-        return any(FileComparableObj.isSameFile(nextFile, file) for nextFile in files)
+    def isFileIn(file, files, isFolder):
+        return any(FileComparableObj.isSameFile(nextFile, file, isFolder) for nextFile in files)
 
-    def isSameFile(file1, file2):
-        if file1.getComparablePath() != file2.getComparablePath():
-            return False
-        if file1.getSize() != file2.getSize():
-            return False
-        return True
+    def isSameFile(file1, file2, isFolder):
+        if isFolder:
+            if file1.getComparablePath() != file2.getComparablePath():
+                return False
+            if file1.getSize() != file2.getSize():
+                return False
+            if file1.getFiles() != file2.getFiles():
+                return False
+            return True
+        else:
+            if file1.getComparablePath() != file2.getComparablePath():
+                return False
+            if file1.getSize() != file2.getSize():
+                return False
+            return True
 
     def print(self):
         files = '' if self.getFiles() == -1 else f"{self.getFiles()}"
@@ -152,7 +186,7 @@ def loadJsonFile(file):
         exit()
 
     for file in data['files']:
-        res.append(FileComparableObj(file))
+        res.append(FileComparableObj(file, fileType))
     return fileType, res
 
 def enforceFileType(ftype1, ftype2, tinput):
@@ -166,11 +200,11 @@ def enforceFileType(ftype1, ftype2, tinput):
         print(f"File type {ftype2} from {tinput[1]} is not valid. Program exiting...")
         exit()
 
-def findDifferences(filesA, filesB):
+def findDifferences(filesA, filesB, isFolder):
     diffs = []
     
     for a in filesA:
-        if not FileComparableObj.isFileIn(a, filesB):
+        if not FileComparableObj.isFileIn(a, filesB, isFolder):
             diffs.append(a)
 
     return diffs
@@ -237,8 +271,8 @@ enforceFileType(ftype1, ftype2, tinput)
 
 #Compare a to b
 #Compare b to a
-diffAToB = findDifferences(files1, files2)
-diffBToA = findDifferences(files2, files1)
+diffAToB = findDifferences(files1, files2, ftype1 == "folder")
+diffBToA = findDifferences(files2, files1, ftype2 == "folder")
 
 writeFileDiff(tinput[0], diffAToB, tinput[1], diffBToA, toutput)
 
