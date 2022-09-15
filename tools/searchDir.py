@@ -229,9 +229,8 @@ class folderStructure:
     def addFile(self, file):
         if self.folders.get(file.getPath()) == None:
             self.folders[file.getPath()] = {
-                "path": file.getPath(),
-                "absPath": file.getAbsFileName(),
-                "comparablePath": file.getCompPath(),
+                "path": file.getAdjustedPath(),
+                "absPath": file.getAbsPath(),
                 "size": file.size,
                 "files": 1,
                 "tab": file.tab,
@@ -253,7 +252,6 @@ class folderStructure:
             allFiles.append({
                 "path": self.folders[key]["path"],
                 "absPath": self.folders[key]["absPath"],
-                "comparablePath": self.folders[key]["comparablePath"],
                 "size": getSize(self.folders[key]["size"], globalSizeConversion),
                 "files": self.folders[key]["files"],
             })
@@ -280,20 +278,28 @@ class file:
 
     def getAbsFileName(self):
         return os.path.abspath(os.path.join(self.path, self.fileName))
+ 
+    def getAbsPath(self):
+        # todo: need to return absolute path without the trailing file
+        #return self.getAbsFileName().split(os.path.abspath(self.path))[0]
+        return self.getAbsFileName()
 
     def getPath(self):
         return self.path
+
+    def getAdjustedPath(self):
+        return self.getPath().split(self.root,1)[1]
 
     def getCompPath(self):
         # split root path which search started from, to current directory and remove it from path to get distinct values
         # remove first character from result as it is just the / character
         # append it with fileName
         # the final result gives a path that is more easily comparable with other directories
-        return os.path.join(self.getPath().split(self.root,1)[1][1:], self.getFileName())
+        return os.path.join(self.getAdjustedPath(), self.getFileName())
 
     def getFile(self):
         return {
-            "path": self.getPath(),
+            "path": self.getAdjustedPath(),
             "absPath": self.getAbsFileName(),
             "comparablePath": self.getCompPath(),
             "fileName": self.getFileName(),

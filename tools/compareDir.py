@@ -91,7 +91,6 @@ class FileComparableObj:
             self.size = jsonData['size'] if "size" in jsonData else "N/A"
             self.fileName = jsonData['fileName'] if "fileName" in jsonData else "N/A"
         elif self.fileType == "folder":
-            self.comparablePath = jsonData['comparablePath'] if "comparablePath" in jsonData else "N/A"
             self.path = jsonData['path'] if "path" in jsonData else "N/A"
             self.absPath = jsonData['absPath'] if "absPath" in jsonData else "N/A"
             self.size = jsonData['size'] if "size" in jsonData else "N/A"
@@ -137,7 +136,6 @@ class FileComparableObj:
                 "size": self.getSize(),
                 "absPath": self.getAbsPath(),
                 "path": self.getPath(),
-                "comparablePath": self.getComparablePath(),
                 "type": self.getFileType(),
             }
         return {
@@ -149,8 +147,6 @@ class FileComparableObj:
 
     def isSameFile(file1, file2, isFolder):
         if isFolder:
-            if file1.getComparablePath() != file2.getComparablePath():
-                return False
             if file1.getSize() != file2.getSize():
                 return False
             if file1.getFiles() != file2.getFiles():
