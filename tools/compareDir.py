@@ -9,7 +9,7 @@ import argparse
 # set and initialize variables used throughout the rest of the program
 printLoadedFiles = False
 debugMatches = False
-defaultDebugger = True
+defaultDebugger = False
 defaultQuieter = True
 defaultOutputFolder = 'output.comp.json'
 validTypes = ["folder", "file"]
