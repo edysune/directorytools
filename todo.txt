@@ -3,9 +3,11 @@ Features:
   -Folders
   -paths instead of file names for metadata and printing
 
+-Add SHA256 support
+
+-Open params on compareDir.py
+   -0 and 1 inputs for old and new backups
+
 Refactoring:
 -major refactoring needed across all of program
   -split into multiple libraries instead
-
-Bugs:
--folder.output.json is outputting file names, and does not need a comparable file

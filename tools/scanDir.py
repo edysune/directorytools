@@ -1,28 +1,8 @@
-#searchDirectory.py
+#scanDir.py
 
 import json 
 import os
 import argparse
-
-# 2) Compare 2 directories against each other
-# 2.5  may need to look into GUI options? GUI options implies that we need a config file saved for this with reading/writing capabilities.
-
-# 3) See about writing these types of things to a database
-
-# 4) Create a GUI for this
-
-# 5) Once in a database, should write some type of logic to merge into existing database
-
-# 6) Should create logic around databases pulling information from database resource sites
-# - Title Recommendations, Seasons, Episodes that do/don't exist, incomplete libraries, shows that are not found, bad structures of stuff
-
-# 7) Possible additions to functionality like mass renaming of episodes and structures, update libraries logs, scan libraries for new data 
-
-# 8) Possible subtitle downloading and merging? Not sure how useful this would be.
-
-
-# Note: May need a way to group together similiar directories instead of just using absolute paths?
-# Note: May need a tool for directory comparitors too - might be useful to have that as a top level tool before this
 
 #============================= DEFINE DEFAULT AND GLOBAL VARIABLES =============================
 # set and initialize variables used throughout the rest of the program
@@ -33,11 +13,6 @@ default_output_folder = 'output.json'
 default_size = "KB"
 
 globalSizeConversion = ""
-
-#directoryToSearch1 = "../test_dir/a1";
-#directoryOutputFile1 = "../output/a1.json";
-#directoryToSearch2 = "../test_dir/a2";
-#directoryOutputFile2 = "../output/a2.json";
 
 #============================= DEFINE ARGPARSE =============================
 # construct the argument parser
@@ -69,7 +44,7 @@ def parseAllArgs(args):
 #   tdirectory     a folder path. Program exits if it doesn't exist.
 def parseDirectory(args):
     if args["path"] is None:
-        print("-p <PATH SEARCH PATH> is not defined\nPlease see HELP screen for more information about how to use this program.")
+        print("-p <PATH SCAN PATH> is not defined\nPlease see HELP screen for more information about how to use this program.")
         exit()
     tdirectory = args["path"]
     if not os.path.exists(tdirectory):
@@ -209,8 +184,11 @@ class fileStructure:
             for f in self.files[key]:
                 retString += f.printFile()
 
-    def writeFiles(self, fileName = "output.json"):
-        outerWrapper = {"type": "file"}
+    def writeFiles(self, rootDirectory, fileName = "output.json"):
+        outerWrapper = {
+            "root": os.path.abspath(rootDirectory),
+            "type": "file"
+            }
         allFiles = []
         for key in self.files.keys():
             for f in self.files[key]:
@@ -244,8 +222,11 @@ class folderStructure:
             tabChr = '\t'
             return f'{tabChr * self.folders[key]["tab"]}{key}\t{self.folders[key]["path"]} ({self.folders[key]["files"]} - {getSize(self.folders[key]["size"], globalSizeConversion)})'
 
-    def writeFolders(self, fileName = "output.json"):
-        outerWrapper = {"type": "folder"}
+    def writeFolders(self, rootDirectory, fileName = "output.json"):
+        outerWrapper = {
+            "root": os.path.abspath(rootDirectory),
+            "type": "folder"
+        }
 
         allFiles = []
         for key in self.folders.keys():
@@ -317,7 +298,7 @@ def printHelper(shouldPrint, msg):
     if shouldPrint:
         print(msg)
 
-def searchDirectory(currentDir, root, fileStruct, folderStruct, tab):
+def scanDirectory(currentDir, root, fileStruct, folderStruct, tab):
     for fname in os.listdir(currentDir):
 
         printHelper(tdebugger, f'Reached File: {os.path.join(currentDir, fname)}')
@@ -325,7 +306,7 @@ def searchDirectory(currentDir, root, fileStruct, folderStruct, tab):
         nextFile = os.path.join(currentDir, fname)
 
         if os.path.isdir(nextFile):
-            searchDirectory(nextFile, root, fileStruct, folderStruct, tab + 1)
+            scanDirectory(nextFile, root, fileStruct, folderStruct, tab + 1)
         elif os.path.isfile(nextFile):
             fileObj = file(currentDir, fname, root, tab)
             fileStruct.addFile(fileObj)
@@ -343,19 +324,19 @@ folderStruct = folderStructure()
 printHelper(tdebugger, 'Starting Program..')
 
 # Main Logic for analyzing directory
-searchDirectory(tdirectory, tdirectory, fileStruct, folderStruct, 0)
+scanDirectory(tdirectory, tdirectory, fileStruct, folderStruct, 0)
 
 printHelper(tdebugger, 'Program Finished')
 printHelper(not tquieter, fileStruct.printFiles())
 
 # Write out file structure
 printHelper(tdebugger, f'Writing to {toutput}')
-fileStruct.writeFiles(toutput)
+fileStruct.writeFiles(tdirectory, toutput)
 
 # Only if argparsed folder param was found, then write out folder structure
 if tfolderAnalyze:
     printHelper(not tquieter, folderStruct.printFolders())
     printHelper(tdebugger, f'Writing to folder.{toutput}')
-    folderStruct.writeFolders(f'folder.{toutput}')
+    folderStruct.writeFolders(tdirectory, f'folder.{toutput}')
 
 exit()

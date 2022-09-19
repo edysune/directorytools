@@ -176,6 +176,7 @@ def loadJsonFile(file):
 
     res = []
     fileType = data['type'].lower()
+    fileRoot = data['root']
 
     if fileType != "file" and fileType != "folder":
         print(f"ERROR - file type {fileType} is neither file nor folder. Exiting program..")
@@ -183,7 +184,7 @@ def loadJsonFile(file):
 
     for file in data['files']:
         res.append(FileComparableObj(file, fileType))
-    return fileType, res
+    return fileType, res, fileRoot
 
 def enforceFileType(ftype1, ftype2, tinput):
     if ftype1 != ftype2:
@@ -231,18 +232,17 @@ def generateFileDiff(diffList):
 
     return convertedFiles
 
-def generateMetadata(diffRootA, diffListA, diffRootB, diffListB):
-    # todo: diffRoot's are the jsonfile, not the actual path. Will probably need this.
-    return {
-        "insertPath": diffRootA,
-        "insertFilesNum": len(diffListA),
-        "deletePath": diffRootB,
+def writeFileDiff(diffRootA, diffListA, diffRootDirA, fileTypeA, diffRootB, diffListB, diffRootDirB, fileTypeB, fileName):
+    fout = {}
+    fout["metadata"] = { "warning": "unsupported features with folders will not allow syncing"} if fileTypeA != fileTypeB or fileTypeA == "folder" else {
+        "mergeScan": diffRootA,
+        "mergeRootPath": diffRootDirA,
+        "mergeFilesNum": len(diffListA),
+        "deleteScan": diffRootB,
+        "deleteRootPath": diffRootDirB,
         "deleteFilesNum": len(diffListB),
     }
-
-def writeFileDiff(diffRootA, diffListA, diffRootB, diffListB, fileName):
-    fout = {}
-    fout["metadata"] = generateMetadata(diffRootA, diffListA, diffRootB, diffListB)
+        
     # todo: diffRoot's are the jsonfile, not the actual path. Will probably need this.
     fout[diffRootA] = generateFileDiff(diffListA)
     fout[diffRootB] = generateFileDiff(diffListB)
@@ -256,8 +256,8 @@ tinput, toutput, tdebug = parseAllArgs(args)
 
 printHelper(tdebug, 'Starting Program..')
 
-ftype1, files1 = loadJsonFile(tinput[0])
-ftype2, files2 = loadJsonFile(tinput[1])
+ftype1, files1, rootDir1 = loadJsonFile(tinput[0])
+ftype2, files2, rootDir2= loadJsonFile(tinput[1])
 
 printLoad(tinput[0], ftype1, files1)
 printLoad(tinput[1], ftype2, files2)
@@ -270,7 +270,11 @@ enforceFileType(ftype1, ftype2, tinput)
 diffAToB = findDifferences(files1, files2, ftype1 == "folder")
 diffBToA = findDifferences(files2, files1, ftype2 == "folder")
 
-writeFileDiff(tinput[0], diffAToB, tinput[1], diffBToA, toutput)
+writeFileDiff(
+    tinput[0], diffAToB, rootDir1, ftype1,
+    tinput[1], diffBToA, rootDir2, ftype2,
+    toutput
+)
 
 printResults(tdebug, tinput, diffAToB, diffBToA)
 
