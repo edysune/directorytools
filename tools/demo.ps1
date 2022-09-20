@@ -25,3 +25,4 @@ py .\scanDir.py -p $outDir1 -o $scanFileOut1
 py .\scanDir.py -p $outDir2 -o $scanFileOut2
 py .\compareDir.py -i $scanFileOut1 $scanFileOut2 -o $fileDiffs
 py .\compareDir.py -i $scanFolderOut1 $scanFolderOut2 -o $folderDiffs
+py .\mergeDir.py -i $fileDiffs
