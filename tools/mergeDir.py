@@ -1,6 +1,7 @@
 #mergeDir.py
 # script that merges differences
 
+from ast import For
 import json 
 import os
 import argparse
@@ -129,11 +130,39 @@ def loadJsonFile(file):
 
     return deletes, merges, deleteBasePath, mergeBasePath
 
-def enforceFileType(ftype):
-    if ftype not in validTypes :
-        print(f"File type {ftype} is not valid. Program exiting...")
-        exit()
+def enforceFileType(files):
+    for item in files:
+        if item["type"] == None or item["type"] == "folder":
+            print(f"File type is not valid. Program exiting...")
+            exit()
 
+def removeFiles(tdebug, filesToRemove, removeAbsPath, confirmDeleteNeeded):
+    printHelper(tdebug, f'Preparing for deleting files: {removeAbsPath}')
+
+    for file in filesToRemove:
+        if "fileName" not in file.keys() or "absPath" not in file.keys():
+            printHelper(tdebug, f"File name or Absolute Path is missing. Program exiting...")
+            exit()
+
+        if not os.path.exists(file["absPath"]):
+            printHelper(tdebug, f"Error: directory {file['absPath']} does not exist - Please verify path")
+            exit()
+
+        if confirmDeleteNeeded:
+            userInput = input(f"Confirm (Y) to delete: {file['absPath']}\n")
+            if userInput != "Y":
+                print("Skipping...")
+                continue
+
+        print(f'Deleting: {file["absPath"]}:')
+        
+        # todo: maybe catch exceptions around os.remove
+        os.remove(file["absPath"])
+
+    printHelper(tdebug, f'Deleting files finished')
+
+def mergeFiles(tdebug, filesToMerge, mergeAbsPath, confirmDeleteNeeded):
+    print("Merge Skipped")
 
 # parse all arguments into pre-defined variables
 tinput, tforce, tremote, tdebug = parseAllArgs(args)
@@ -145,7 +174,15 @@ if tremote != None:
     exit()
 
 deletes, merges, deleteBasePath, mergeBasePath = loadJsonFile(tinput)
-# enforceFileType(ftype1, ftype2, tinput)
+
+printHelper(tdebug, f'Merge Abs Path: {mergeBasePath}\nNumber of files to merge: {len(merges)}')
+printHelper(tdebug, f'Delete Abs Path: {deleteBasePath}\nNumber of files to delete: {len(deletes)}')
+
+enforceFileType(merges)
+enforceFileType(deletes)
+
+removeFiles(tdebug, deletes, deleteBasePath, False)
+mergeFiles(tdebug, merges, mergeBasePath, False)
 
 printHelper(tdebug, 'Program Finished')
 
