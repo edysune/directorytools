@@ -1,4 +1,4 @@
-# Directory Tools
+# BACKUP BUDDY - Directory Tools
 Tools comparing directories. This mainly was built to solve issues with keeping manual back-ups. Files will sometimes drift (renamed, missing, etc), and back-ups are sometimes really difficult to go through, especially with larger drives. The ultimate goal of this project is to make a client/server that will continuously check on changes made to backups, and to sync missing files.
 
 # setup

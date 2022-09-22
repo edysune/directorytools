@@ -1,18 +1,19 @@
 #mergeDir.py
 # script that merges differences
 
-from ast import For
 import json 
 import os
 import argparse
+import shutil
 
 #============================= DEFINE DEFAULT AND GLOBAL VARIABLES =============================
 # set and initialize variables used throughout the rest of the program
+defaultDeleteConfirmNeeded = True
+defaultMergeConfirmNeeded = True
 defaultDebugger = True
 defaultForce = False
 defaultQuieter = True
 validTypes = ["file"]
-
 #============================= DEFINE ARGPARSE =============================
 # construct the argument parser
 ap = argparse.ArgumentParser()
@@ -136,33 +137,100 @@ def enforceFileType(files):
             print(f"File type is not valid. Program exiting...")
             exit()
 
+def handleInput(actionType, path):
+    
+    while True:
+        userInput = input(f"{actionType}: {path} | ")
+        userInput = userInput.upper()
+
+        if userInput == "Y":
+            return True, False, False
+        elif userInput == "N":
+            print(f'SKIPPED.')
+            return True, False, True
+        elif userInput == "S":
+            print(f'SKIPPED')
+            return True, True, True   
+        elif userInput == "C":
+            return False, False, False
+        elif userInput == "A":
+            print("\nABORTING...")
+            exit()
+        else:
+            print("\nINVALID INPUT\n")
+
+
 def removeFiles(tdebug, filesToRemove, removeAbsPath, confirmDeleteNeeded):
-    printHelper(tdebug, f'Preparing for deleting files: {removeAbsPath}')
+    printHelper(tdebug, f'Preparing to delete files: {removeAbsPath}...')
+    skipAll = False
+    skipNext = False
+    if confirmDeleteNeeded:
+        print("==== MENU ====\n(Y) To Confirm\n(N) Skip file\n(A) Abort\n(S) Skip All\n(C) Confirm All")
 
     for file in filesToRemove:
+        if skipAll:
+            print(f'SKIPPED: {file["absPath"]}:')
+            continue
+
         if "fileName" not in file.keys() or "absPath" not in file.keys():
-            printHelper(tdebug, f"File name or Absolute Path is missing. Program exiting...")
+            printHelper(tdebug, f"DELETE ERROR: File name or Absolute Path is missing. Program exiting...")
             exit()
 
         if not os.path.exists(file["absPath"]):
-            printHelper(tdebug, f"Error: directory {file['absPath']} does not exist - Please verify path")
+            printHelper(tdebug, f"DELETE ERROR: directory {file['absPath']} does not exist - Please verify path")
             exit()
 
         if confirmDeleteNeeded:
-            userInput = input(f"Confirm (Y) to delete: {file['absPath']}\n")
-            if userInput != "Y":
-                print("Skipping...")
-                continue
+            confirmDeleteNeeded, skipAll, skipNext = handleInput("DELETE?", file['absPath'])
 
-        print(f'Deleting: {file["absPath"]}:')
-        
-        # todo: maybe catch exceptions around os.remove
-        os.remove(file["absPath"])
+        if not skipNext:
+            # todo: maybe catch exceptions around os.remove
+            os.remove(file["absPath"])
+            print(f'DELETED {file["absPath"]}')
+
 
     printHelper(tdebug, f'Deleting files finished')
 
-def mergeFiles(tdebug, filesToMerge, mergeAbsPath, confirmDeleteNeeded):
-    print("Merge Skipped")
+def mergeFiles(tdebug, filesToMerge, mergeAbsPath, deleteBasePath, confirmMergeNeeded):
+    printHelper(tdebug, f'Preparing to merge files: {mergeAbsPath}...')
+    skipAll = False
+    skipNext = False
+    if confirmMergeNeeded:
+        print("==== MENU ====\n(Y) To Confirm\n(N) Skip file\n(A) Abort\n(S) Skip All\n(C) Confirm All")
+
+    for file in filesToMerge:
+        if skipAll:
+            print(f'SKIPPED: {file["absPath"]}:')
+            continue
+
+        if "fileName" not in file.keys() or "absPath" not in file.keys():
+            printHelper(tdebug, f"MERGE ERROR: File name or Absolute Path is missing. Program exiting...")
+            exit()
+
+        if not os.path.exists(file["absPath"]):
+            printHelper(tdebug, f"MERGE ERROR: directory {file['absPath']} does not exist - Please verify path")
+            exit()
+
+        if confirmMergeNeeded:
+            confirmMergeNeeded, skipAll, skipNext = handleInput("MERGE?", file['absPath'])
+
+        if not skipNext:
+            # todo: maybe catch exceptions around os.copy2
+            src = file["absPath"]
+            dst = os.path.join(deleteBasePath, file["comparablePath"])
+            dstPath = os.path.dirname(dst)
+
+            dstPathExists = os.path.exists(dstPath)
+
+            if not dstPathExists:
+                print("Creating Directories...")
+                # todo: maybe catch exceptions around os.makedirs
+                os.makedirs(dstPath)
+
+            shutil.copy2(src, dst)
+            print(f'MERGED {dst}')
+
+    printHelper(tdebug, f'Merging files finished')
 
 # parse all arguments into pre-defined variables
 tinput, tforce, tremote, tdebug = parseAllArgs(args)
@@ -181,8 +249,8 @@ printHelper(tdebug, f'Delete Abs Path: {deleteBasePath}\nNumber of files to dele
 enforceFileType(merges)
 enforceFileType(deletes)
 
-removeFiles(tdebug, deletes, deleteBasePath, False)
-mergeFiles(tdebug, merges, mergeBasePath, False)
+removeFiles(tdebug, deletes, deleteBasePath, defaultDeleteConfirmNeeded)
+mergeFiles(tdebug, merges, mergeBasePath, deleteBasePath, defaultMergeConfirmNeeded)
 
 printHelper(tdebug, 'Program Finished')
 
