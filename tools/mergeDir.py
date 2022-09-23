@@ -217,7 +217,16 @@ def mergeFiles(tdebug, filesToMerge, mergeAbsPath, deleteBasePath, confirmMergeN
         if not skipNext:
             # todo: maybe catch exceptions around os.copy2
             src = file["absPath"]
-            dst = os.path.join(deleteBasePath, file["comparablePath"])
+
+            # Remove any leading / - it can cause issues with destination folder thinking it's an absolute path over relative - it will probably never be root of anything
+            count = 0
+        
+            while file["comparablePath"][count] == '\\':
+                count += 1
+
+            pathToFile = file["comparablePath"][count:]
+
+            dst = os.path.join(deleteBasePath, pathToFile)
             dstPath = os.path.dirname(dst)
 
             dstPathExists = os.path.exists(dstPath)
