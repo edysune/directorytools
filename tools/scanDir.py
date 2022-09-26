@@ -3,6 +3,8 @@
 import json 
 import os
 import argparse
+from paramiko import SSHClient
+from stat import S_ISDIR, S_ISREG
 
 #============================= DEFINE DEFAULT AND GLOBAL VARIABLES =============================
 # set and initialize variables used throughout the rest of the program
@@ -17,12 +19,15 @@ globalSizeConversion = ""
 #============================= DEFINE ARGPARSE =============================
 # construct the argument parser
 ap = argparse.ArgumentParser()
-ap.add_argument("-p", "--path", help="Path to the root directory to start analysis - Program will recursively analyze path for files and folders.")
+ap.add_argument("-d", "--directory", help="Path to the root directory to start analysis - Program will recursively analyze path for files and folders.")
 ap.add_argument("-f", "--folder", help="true/false or t/f supported. This argument analyzes folder structs as a whole, instead of individual files. This will run alongside the file program, and output to folder.<output.json>.")
 ap.add_argument("-s", "--size", help="Conversion Size for file output. B, KB, MB, GB are supported currently. KB is set by default unless specified otherwise.")
 ap.add_argument("-o", "--output", help="path and filename of output json file created. Defaults to output.json.")
 ap.add_argument("-q", "--quiet", help="true/false or t/f supported. This argument quiets printing to the screen in a more readable tree-like structure aside from writing object to json.")
-ap.add_argument("-d", "--debug", help="true/false or t/f supported. This argument turns debugging prints on/off, which gives slightly more information about program as it runs.")
+# ap.add_argument("-d", "--debug", help="true/false or t/f supported. This argument turns debugging prints on/off, which gives slightly more information about program as it runs.")
+ap.add_argument("-r", "--remote", help="Script uses SSH to connect via server url. It's assumed to be local unless this flag is active")
+ap.add_argument("-u", "--user", help="user for remote SSH. Not needed for local usage.")
+ap.add_argument("-p", "--port", help="port for remote SSH. Not needed for local usage.")
 args = vars(ap.parse_args())
 
 #============================= DEFINE FUNCTIONS =============================
@@ -34,7 +39,8 @@ def parseAllArgs(args):
     tdebugger = parseDebug(args)
     tfolderAnalyze = parseFolder(args)
     tsize = parseSize(args)
-    return tdirectory, toutput, tquieter, tdebugger, tfolderAnalyze, tsize
+    tremote = parseRemote(args)
+    return tdirectory, toutput, tquieter, tdebugger, tfolderAnalyze, tsize, tremote
 
 #Preconditions: None
 #Postconditions: None
@@ -43,13 +49,13 @@ def parseAllArgs(args):
 #Returns:
 #   tdirectory     a folder path. Program exits if it doesn't exist.
 def parseDirectory(args):
-    if args["path"] is None:
-        print("-p <PATH SCAN PATH> is not defined\nPlease see HELP screen for more information about how to use this program.")
+    if args["directory"] is None:
+        print("-d <SCAN PATH DIRECTORY> is not defined\nPlease see HELP screen for more information about how to use this program.")
         exit()
-    tdirectory = args["path"]
-    if not os.path.exists(tdirectory):
-        print(f"Error: directory {tdirectory} does not exist - Please verify path")
-        exit()
+    tdirectory = args["directory"]
+    # if not os.path.exists(tdirectory):
+    #     print(f"Error: directory {tdirectory} does not exist - Please verify path")
+    #     exit()
     return tdirectory
 
 #Preconditions: None
@@ -70,18 +76,7 @@ def parseOutputFile(args):
 #Returns:
 #   tdebug        a valid boolean value either True/False. If anything else is given, the value is reverted back to default
 def parseDebug(args):
-    if args["debug"] is None:
-        return default_debugger
-
-    tdebug = args["debug"].lower()
-    if tdebug == "true" or tdebug == "t":
-        return True
-    elif tdebug == "false" or tdebug == "f":
-        return False
-    else:
-        print(f"Error: debug argument {tdebug} not true/false or t/f - defaulting to {default_debugger}")
-        return default_debugger
-
+    return default_debugger
 
 #Preconditions: None
 #Postconditions: None
@@ -143,6 +138,23 @@ def parseSize(args):
         print(f"Error: size argument {tsize} not B, KB, MB, or GB - defaulting to {default_size}")
         return default_size
 
+#Preconditions: None
+#Postconditions: None
+#Arguments:
+#   args        
+#Returns:
+#   tsize        
+def parseRemote(args):
+    if args["remote"] is None:
+        return None
+
+    remote = args["remote"]
+    user = args["user"]
+    port = args["port"]
+
+    return {"remote": remote, "user": user, "port": port}
+
+
 
 #============================= Public Functions =============================
 
@@ -165,6 +177,8 @@ def getSize(size, conversion):
     return f'{size / conversionRate} {conversion}'
 
 #============================= SUPPLEMENTAL CLASSES =============================
+
+
 
 class fileStructure:
     def __init__(self):
@@ -244,10 +258,13 @@ class folderStructure:
         f.close()
 
 class file:
-    def __init__(self, path, fileName, root, tab):
+    def __init__(self, path, fileName, root, tab, size=None):
         self.path = path
         self.fileName = fileName
-        self.size = os.path.getsize(os.path.join(path, fileName))
+        if (size == None):
+            self.size = os.path.getsize(os.path.join(path, fileName))
+        else:
+            self.size = size;
         self.tab = tab
         self.root = root
     
@@ -299,6 +316,10 @@ def printHelper(shouldPrint, msg):
         print(msg)
 
 def scanDirectory(currentDir, root, fileStruct, folderStruct, tab):
+    if not os.path.exists(currentDir):
+        print(f"Error: directory {currentDir} does not exist - Please verify path")
+        exit()
+
     for fname in os.listdir(currentDir):
 
         printHelper(tdebugger, f'Reached File: {os.path.join(currentDir, fname)}')
@@ -312,9 +333,39 @@ def scanDirectory(currentDir, root, fileStruct, folderStruct, tab):
             fileStruct.addFile(fileObj)
             folderStruct.addFile(fileObj)
 
+def scanDirectoryRemotely(remoteInput, currentDir, root, fileStruct, tab):
+    print("Attempting to connect via SSH...")
+    ssh = SSHClient() 
+    ssh.load_host_keys(os.path.expanduser(os.path.join("~", ".ssh", "known_hosts")))
+    ssh.connect(remoteInput["remote"], username=remoteInput["user"])
+    sftp = ssh.open_sftp()
+
+    print("Attempting to connect to:" + currentDir)
+
+    # print(sftp.listdir(currentDir))
+    scanRemotely(sftp, currentDir, root, fileStruct, tab)
+
+
+    print("Closing connections...")
+    sftp.close()
+    ssh.close()
+
+def scanRemotely(sftp, currentDir, root, fileStruct, tab):
+    for entry in sftp.listdir_attr(currentDir):
+
+        nextFile = os.path.join(currentDir, entry.filename)
+        printHelper(tdebugger, f'Reached File: {nextFile}')
+
+        mode = entry.st_mode
+        if S_ISDIR(mode):
+            scanRemotely(sftp, currentDir + "/" + entry.filename, root, fileStruct, tab + 1)
+        elif S_ISREG(mode):
+            fileObj = file(currentDir, entry.filename, root, tab, entry.st_size)
+            fileStruct.addFile(fileObj)
+
 
 # parse all arguments into pre-defined variables
-tdirectory, toutput, tquieter, tdebugger, tfolderAnalyze, tsize = parseAllArgs(args)
+tdirectory, toutput, tquieter, tdebugger, tfolderAnalyze, tsize, tremote = parseAllArgs(args)
 
 globalSizeConversion = tsize
 
@@ -323,8 +374,11 @@ folderStruct = folderStructure()
 
 printHelper(tdebugger, 'Starting Program..')
 
-# Main Logic for analyzing directory
-scanDirectory(tdirectory, tdirectory, fileStruct, folderStruct, 0)
+if tremote != None:
+    scanDirectoryRemotely(tremote, tdirectory, tdirectory, fileStruct, 0)
+else:
+    # Main Logic for analyzing directory
+    scanDirectory(tdirectory, tdirectory, fileStruct, folderStruct, 0)
 
 printHelper(tdebugger, 'Program Finished')
 printHelper(not tquieter, fileStruct.printFiles())
