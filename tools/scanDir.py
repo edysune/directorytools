@@ -286,7 +286,10 @@ class file:
         return self.path
 
     def getAdjustedPath(self):
-        return self.getPath().split(self.root,1)[1]
+        path = self.getPath().split(self.root,1)[1]
+        while path != "" and path[0] == "\\" or  path[0] == "/":
+            path = path[1:]
+        return path
 
     def getCompPath(self):
         # split root path which search started from, to current directory and remove it from path to get distinct values
@@ -352,13 +355,15 @@ def scanDirectoryRemotely(remoteInput, currentDir, root, fileStruct, tab):
 
 def scanRemotely(sftp, currentDir, root, fileStruct, tab):
     for entry in sftp.listdir_attr(currentDir):
-
+        # https://stackoverflow.com/questions/70928978/sftp-how-to-list-large-of-files
+        # May want to start here next, as I'm not making much progress, and removing a ton of my files just doesn't seem useful
         nextFile = os.path.join(currentDir, entry.filename)
         printHelper(tdebugger, f'Reached File: {nextFile}')
 
         mode = entry.st_mode
         if S_ISDIR(mode):
-            scanRemotely(sftp, currentDir + "/" + entry.filename, root, fileStruct, tab + 1)
+            # todo: may need to see if there is a safer way to join these 2, as \\ may not be safe to use for all os's
+            scanRemotely(sftp, currentDir + "\\" + entry.filename, root, fileStruct, tab + 1)
         elif S_ISREG(mode):
             fileObj = file(currentDir, entry.filename, root, tab, entry.st_size)
             fileStruct.addFile(fileObj)
