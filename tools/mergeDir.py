@@ -5,6 +5,8 @@ import json
 import os
 import argparse
 import shutil
+import math
+import sys
 from paramiko import SSHClient
 
 #============================= DEFINE DEFAULT AND GLOBAL VARIABLES =============================
@@ -119,6 +121,15 @@ def parseRemote(args):
 
 
 #============================= DRIVER START =============================
+
+def progressbar(x, y):
+    bar_len = 60
+    filled_len = math.ceil(bar_len * x / float(y))
+    percents = math.ceil(100.0 * x / float(y))
+    bar = '=' * filled_len + '-' * (bar_len - filled_len)
+    filesize = f'{math.ceil(y/1024):,} KB' if y > 1024 else f'{y} byte'
+    sys.stdout.write(f'[{bar}] {percents}% {filesize}\r')
+    sys.stdout.flush()
 
 def printHelper(shouldPrint, msg):
     if shouldPrint:
@@ -338,7 +349,8 @@ def mergeFiles(tdebug, filesToMerge, mergeAbsPath, deleteBasePath, confirmMergeN
                 # todo - maybe do some error catching around this
                 #for Uploading file from local to remote machine
                 print("WRITING TO: " + dst)   
-                sftp.put(src, dst)   
+
+                sftp.put(src, dst, callback=lambda x,y: progressbar(x,y))   
             else:
                 print("MERGE ERROR - (copying from a remote directory [FALSE]) NOT IMPLEMENTED YET")
                 # for Downloading a file from remote machine

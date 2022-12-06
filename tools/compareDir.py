@@ -11,6 +11,7 @@ printLoadedFiles = False
 debugMatches = False
 defaultDebugger = False
 defaultQuieter = True
+useLegacyComparator = False
 defaultOutputFolder = 'output.comp.json'
 validTypes = ["folder", "file"]
 
@@ -174,6 +175,9 @@ def loadJsonFile(file):
     f = open(file,)
     data = json.load(f)
 
+    # resDict => for faster lookups when comparing
+    resDict = dict()
+
     res = []
     fileType = data['type'].lower()
     fileRoot = data['root']
@@ -183,8 +187,10 @@ def loadJsonFile(file):
         exit()
 
     for file in data['files']:
-        res.append(FileComparableObj(file, fileType))
-    return fileType, res, fileRoot
+        f = FileComparableObj(file, fileType)
+        resDict[f.getComparablePath()] = f
+        res.append(f)
+    return fileType, res, resDict, fileRoot
 
 def enforceFileType(ftype1, ftype2, tinput):
     if ftype1 != ftype2:
@@ -197,12 +203,28 @@ def enforceFileType(ftype1, ftype2, tinput):
         print(f"File type {ftype2} from {tinput[1]} is not valid. Program exiting...")
         exit()
 
-def findDifferences(filesA, filesB, isFolder):
+def findDifferences(tdebug, filesA, filesB, isFolder, filesDictA, filesDictB):
     diffs = []
-    
-    for a in filesA:
-        if not FileComparableObj.isFileIn(a, filesB, isFolder):
-            diffs.append(a)
+
+    if useLegacyComparator:
+        printHelper(tdebug, 'Using Legacy Comparator.')
+        # has n * m complexity with usage of lists
+        for a in filesA:
+            if not FileComparableObj.isFileIn(a, filesB, isFolder):
+                diffs.append(a)
+    else:
+        printHelper(tdebug, 'Using Quick Comparator.')
+        # has n complexity with usage of dictionarys
+        for fileComparablePath in filesDictA.keys():
+            fileB = filesDictB.get(fileComparablePath)
+            if fileB == None:
+                # if file never existed on second dictionary
+                printHelper(tdebug, 'New File: ' + fileComparablePath)
+                diffs.append(filesDictA[fileComparablePath])
+            elif not FileComparableObj.isSameFile(filesDictA[fileComparablePath], fileB, isFolder):
+                # If file did exist but is different (updated/edited)
+                printHelper(tdebug, 'Updated File: ' + fileComparablePath)
+                diffs.append(filesDictA[fileComparablePath])
 
     return diffs
 
@@ -256,8 +278,8 @@ tinput, toutput, tdebug = parseAllArgs(args)
 
 printHelper(tdebug, 'Starting Program..')
 
-ftype1, files1, rootDir1 = loadJsonFile(tinput[0])
-ftype2, files2, rootDir2= loadJsonFile(tinput[1])
+ftype1, files1, filesDict1, rootDir1 = loadJsonFile(tinput[0])
+ftype2, files2, filesDict2, rootDir2= loadJsonFile(tinput[1])
 
 printLoad(tinput[0], ftype1, files1)
 printLoad(tinput[1], ftype2, files2)
@@ -267,8 +289,8 @@ enforceFileType(ftype1, ftype2, tinput)
 
 #Compare a to b
 #Compare b to a
-diffAToB = findDifferences(files1, files2, ftype1 == "folder")
-diffBToA = findDifferences(files2, files1, ftype2 == "folder")
+diffAToB = findDifferences(tdebug, files1, files2, ftype1 == "folder", filesDict1, filesDict2)
+diffBToA = findDifferences(tdebug, files2, files1, ftype2 == "folder", filesDict2, filesDict1)
 
 writeFileDiff(
     tinput[0], diffAToB, rootDir1, ftype1,
