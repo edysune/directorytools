@@ -13,10 +13,12 @@ from paramiko import SSHClient
 # set and initialize variables used throughout the rest of the program
 defaultDeleteConfirmNeeded = True
 defaultMergeConfirmNeeded = True
-defaultDebugger = True
+defaultDebugger = False
 defaultForce = False
 defaultQuieter = True
 validTypes = ["file"]
+menuString = "(Y) To Confirm\t(N) Skip file\t(A) Abort\t(S) Skip All\t(C) Confirm All\n"
+
 #============================= DEFINE ARGPARSE =============================
 # construct the argument parser
 ap = argparse.ArgumentParser()
@@ -122,13 +124,13 @@ def parseRemote(args):
 
 #============================= DRIVER START =============================
 
-def progressbar(x, y):
+def progressbar(x, y, prePrint = "", postPrint = ""):
     bar_len = 60
     filled_len = math.ceil(bar_len * x / float(y))
     percents = math.ceil(100.0 * x / float(y))
     bar = '=' * filled_len + '-' * (bar_len - filled_len)
     filesize = f'{math.ceil(y/1024):,} KB' if y > 1024 else f'{y} byte'
-    sys.stdout.write(f'[{bar}] {percents}% {filesize}\r')
+    sys.stdout.write(f'{prePrint}[{bar}] {percents}% {filesize}{postPrint}\r')
     sys.stdout.flush()
 
 def printHelper(shouldPrint, msg):
@@ -198,24 +200,23 @@ def remoteExists(sftp, path):
         sftp.stat(path)
     except IOError as e:
         if 'No such file' in str(e):
-            print(f'Directory Does not exist remotely: {path}')
+            # print(f'Directory Does not exist remotely: {path}')
             return False
         raise
     else:
         return True
 
 def removeFiles(tdebug, filesToRemove, removeAbsPath, confirmDeleteNeeded, tremote):
-    printHelper(tdebug, f'Preparing to delete files: {removeAbsPath}...')
     skipAll = False
     skipNext = False
-    if confirmDeleteNeeded:
-        print("==== MENU ====\n(Y) To Confirm\n(N) Skip file\n(A) Abort\n(S) Skip All\n(C) Confirm All")
+
+    printHelper(confirmDeleteNeeded and len(filesToRemove) > 0, menuString)
 
     deleteRemotely = tremote != None and tremote["mergeRemote"] != None and tremote["mergeRemote"]
     sftp = None
     ssh = None
 
-    if deleteRemotely:
+    if deleteRemotely and len(filesToRemove) > 0:
         ssh = SSHClient() 
         ssh.load_host_keys(os.path.expanduser(os.path.join("~", ".ssh", "known_hosts")))
         ssh.connect(tremote["remote"], username=tremote["user"])
@@ -229,7 +230,7 @@ def removeFiles(tdebug, filesToRemove, removeAbsPath, confirmDeleteNeeded, tremo
         if "fileName" not in file.keys() or "absPath" not in file.keys():
             printHelper(tdebug, f"DELETE ERROR: File name or Absolute Path is missing. Program exiting...")
             if deleteRemotely:
-                print("Closing connections...")
+                printHelper(tdebug, "Closing connections...")
                 sftp.close()
                 ssh.close()
             exit()
@@ -243,41 +244,43 @@ def removeFiles(tdebug, filesToRemove, removeAbsPath, confirmDeleteNeeded, tremo
                 if not os.path.exists(file["absPath"]):
                     printHelper(tdebug, f"DELETE ERROR: directory {file['absPath']} does not exist - Please verify path")
                     if deleteRemotely:
-                        print("Closing connections...")
+                        printHelper(tdebug, "Closing connections...")
                         sftp.close()
                         ssh.close()
                     exit()
                 os.remove(file["absPath"])
-                print(f'DELETED {file["absPath"]}')
+                printHelper(not confirmDeleteNeeded, f'DELETED {file["absPath"]}')
             elif tremote["mergeRemote"]:
                 sftp.remove(file["absPath"])
-                print(f'DELETED {file["absPath"]}')
+                printHelper(not confirmDeleteNeeded, f'DELETED {file["absPath"]}')
 
-    if deleteRemotely:
-        print("Closing connections...")
+    if deleteRemotely and len(filesToRemove) > 0:
+        printHelper(tdebug, "Closing connections...")
         sftp.close()
         ssh.close()
     printHelper(tdebug, f'Deleting files finished')
 
 def mergeFiles(tdebug, filesToMerge, mergeAbsPath, deleteBasePath, confirmMergeNeeded, tremote):
-    printHelper(tdebug, f'Preparing to merge files: {mergeAbsPath}...')
     skipAll = False
     skipNext = False
-    if confirmMergeNeeded:
-        print("==== MENU ====\n(Y) To Confirm\n(N) Skip file\n(A) Abort\n(S) Skip All\n(C) Confirm All")
+
+    printHelper(confirmMergeNeeded and len(filesToMerge) > 0, menuString)
 
     mergeToRemote = tremote != None and tremote["mergeRemote"] != None and tremote["mergeRemote"]
     sftp = None
     ssh = None
 
-    if mergeToRemote:
+    if mergeToRemote and len(filesToMerge) > 0:
         ssh = SSHClient() 
         ssh.load_host_keys(os.path.expanduser(os.path.join("~", ".ssh", "known_hosts")))
         ssh.connect(tremote["remote"], username=tremote["user"])
         sftp = ssh.open_sftp()
 
+    totalFiles = len(filesToMerge)
+    currentFileNum = 0
 
     for file in filesToMerge:
+        currentFileNum += 1
         if skipAll:
             print(f'SKIPPED: {file["absPath"]}:')
             continue
@@ -285,7 +288,7 @@ def mergeFiles(tdebug, filesToMerge, mergeAbsPath, deleteBasePath, confirmMergeN
         if "fileName" not in file.keys() or "absPath" not in file.keys():
             printHelper(tdebug, f"MERGE ERROR: File name or Absolute Path is missing. Program exiting...")
             if mergeToRemote:
-                print("Closing connections...")
+                printHelper(tdebug, "Closing connections...")
                 sftp.close()
                 ssh.close()
             exit()
@@ -298,7 +301,7 @@ def mergeFiles(tdebug, filesToMerge, mergeAbsPath, deleteBasePath, confirmMergeN
                 if not os.path.exists(file["absPath"]):
                     printHelper(tdebug, f"MERGE ERROR: directory {file['absPath']} does not exist - Please verify path")
                     if mergeToRemote:
-                        print("Closing connections...")
+                        printHelper(tdebug, "Closing connections...")
                         sftp.close()
                         ssh.close()
                     exit()
@@ -314,18 +317,19 @@ def mergeFiles(tdebug, filesToMerge, mergeAbsPath, deleteBasePath, confirmMergeN
                 dstPathExists = os.path.exists(dstPath)
 
                 if not dstPathExists:
-                    print("Creating Directories...")
+                    # print("Creating Directories...")
                     # todo: maybe catch exceptions around os.makedirs
                     os.makedirs(dstPath)
 
                 shutil.copy2(src, dst)
-                print(f'MERGED {dst}')
+                print()
+                printHelper(not confirmMergeNeeded, f'MERGED {dst}')
             elif tremote["mergeRemote"]:
 
                 if not os.path.exists(file["absPath"]):
                     printHelper(tdebug, f"MERGE ERROR: directory {file['absPath']} does not exist - Please verify path")
                     if mergeToRemote:
-                        print("Closing connections...")
+                        printHelper(tdebug, "Closing connections...")
                         sftp.close()
                         ssh.close()
                     exit()
@@ -339,7 +343,7 @@ def mergeFiles(tdebug, filesToMerge, mergeAbsPath, deleteBasePath, confirmMergeN
                 pathsToCreate = []
 
                 while not remoteExists(sftp, curPath):
-                    print("CHECKING: " + curPath)
+                    # print("CHECKING: " + curPath)
                     pathsToCreate.append(curPath)
                     curPath = os.path.dirname(curPath)
                     
@@ -348,15 +352,16 @@ def mergeFiles(tdebug, filesToMerge, mergeAbsPath, deleteBasePath, confirmMergeN
  
                 # todo - maybe do some error catching around this
                 #for Uploading file from local to remote machine
-                print("WRITING TO: " + dst)   
+                printHelper(not confirmMergeNeeded, f'MERGED {dst}')
 
-                sftp.put(src, dst, callback=lambda x,y: progressbar(x,y))   
+                sftp.put(src, dst, callback=lambda x,y: progressbar(x,y, f"({currentFileNum}/{totalFiles}) "))
+                sys.stdout.flush()
             else:
                 print("MERGE ERROR - (copying from a remote directory [FALSE]) NOT IMPLEMENTED YET")
                 # for Downloading a file from remote machine
                 #sftp.get(‘remotefileth’,’localfilepath’)   
                 if mergeToRemote:
-                    print("Closing connections...")
+                    printHelper(tdebug, "Closing connections...")
                     sftp.close()
                     ssh.close()
                 exit()
@@ -372,8 +377,8 @@ printHelper(tdebug, 'Starting Program..')
 
 deletes, merges, deleteBasePath, mergeBasePath = loadJsonFile(tinput)
 
-printHelper(tdebug, f'Merge Abs Path: {mergeBasePath}\nNumber of files to merge: {len(merges)}')
-printHelper(tdebug, f'Delete Abs Path: {deleteBasePath}\nNumber of files to delete: {len(deletes)}')
+print(f'\nDelete\t({len(deletes)}):\t{deleteBasePath}')
+print(f'Merge\t({len(merges)}):\t{mergeBasePath}\n')
 
 enforceFileType(merges)
 enforceFileType(deletes)

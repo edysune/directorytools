@@ -337,19 +337,19 @@ def scanDirectory(currentDir, root, fileStruct, folderStruct, tab):
             folderStruct.addFile(fileObj)
 
 def scanDirectoryRemotely(remoteInput, currentDir, root, fileStruct, tab):
-    print("Attempting to connect via SSH...")
+    printHelper(tdebugger, "Attempting to connect via SSH...")
+
     ssh = SSHClient() 
     ssh.load_host_keys(os.path.expanduser(os.path.join("~", ".ssh", "known_hosts")))
     ssh.connect(remoteInput["remote"], username=remoteInput["user"])
     sftp = ssh.open_sftp()
 
-    print("Attempting to connect to:" + currentDir)
+    printHelper(tdebugger, f"Connecting to {currentDir}")
 
     # print(sftp.listdir(currentDir))
     scanRemotely(sftp, currentDir, root, fileStruct, tab)
 
-
-    print("Closing connections...")
+    printHelper(tdebugger, "Closing connections...")
     sftp.close()
     ssh.close()
 
