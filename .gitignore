@@ -1,3 +1,4 @@
 # ignore ALL json files in tools
 tools/*.json
 results
+tools/__pycache__
