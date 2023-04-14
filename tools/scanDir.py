@@ -5,6 +5,7 @@ import os
 import argparse
 from paramiko import SSHClient
 from stat import S_ISDIR, S_ISREG
+from structs import *
 
 #============================= DEFINE DEFAULT AND GLOBAL VARIABLES =============================
 # set and initialize variables used throughout the rest of the program
@@ -13,6 +14,7 @@ default_quieter = True
 default_folderAnalyze = True
 default_output_folder = 'output.json'
 default_size = "KB"
+default_os = "win"
 
 globalSizeConversion = ""
 
@@ -28,6 +30,8 @@ ap.add_argument("-q", "--quiet", help="true/false or t/f supported. This argumen
 ap.add_argument("-r", "--remote", help="Script uses SSH to connect via server url. It's assumed to be local unless this flag is active")
 ap.add_argument("-u", "--user", help="user for remote SSH. Not needed for local usage.")
 ap.add_argument("-p", "--port", help="port for remote SSH. Not needed for local usage.")
+ap.add_argument("-c", "--cred", help="password for remote SSH. Not needed for local usage.")
+ap.add_argument("-os", "--osys", help="operating system. Defaults to 'win'.")
 args = vars(ap.parse_args())
 
 #============================= DEFINE FUNCTIONS =============================
@@ -40,7 +44,8 @@ def parseAllArgs(args):
     tfolderAnalyze = parseFolder(args)
     tsize = parseSize(args)
     tremote = parseRemote(args)
-    return tdirectory, toutput, tquieter, tdebugger, tfolderAnalyze, tsize, tremote
+    tos = parseOs(args)
+    return tdirectory, toutput, tquieter, tdebugger, tfolderAnalyze, tsize, tremote, tos
 
 #Preconditions: None
 #Postconditions: None
@@ -121,6 +126,26 @@ def parseFolder(args):
 #Preconditions: None
 #Postconditions: None
 #Arguments:
+#   args        a dictionary containing quiet key that contains win or linux
+#Returns:
+#   osType      a valid value for os types, mostly used for remote/ssh
+def parseOs(args):
+    osType = args["osys"]
+
+    validValues = ["win", "linux"]
+
+    if osType in validValues:
+        return osType
+    elif osType is None:
+        return default_os
+    else:
+        print(f"Error: os argument {osType} not win, or linux - defaulting to {default_os}")
+        return default_os
+
+
+#Preconditions: None
+#Postconditions: None
+#Arguments:
 #   args        a dictionary containing quiet key that contains B, KB, MB, or GB
 #Returns:
 #   tsize        a valid value for B, KB, MB, or GB. If anything else is given, the value is reverted back to default
@@ -151,168 +176,24 @@ def parseRemote(args):
     remote = args["remote"]
     user = args["user"]
     port = args["port"]
-
-    return {"remote": remote, "user": user, "port": port}
-
+    password = args["cred"]
 
 
-#============================= Public Functions =============================
-
-def getSize(size, conversion):
-
-    conversionRate = 1
-    conversion = conversion.upper()
-
-    if conversion == "B":
-        return f'{size} {conversion}'
-
-    # todo: refactor this, this is done horribly but shouldn't have much problems with simple data
-    if conversion == "KB":
-        conversionRate = 1000
-    elif conversion == "MB":
-        conversionRate = 1000000
-    elif conversion == "GB":
-        conversionRate = 1000000000
-
-    return f'{size / conversionRate} {conversion}'
-
-#============================= SUPPLEMENTAL CLASSES =============================
-
-
-
-class fileStructure:
-    def __init__(self):
-        self.files = dict()
-    
-    def addFile(self, file):
-        if self.files.get(file.getPath()) == None:
-            self.files[file.getPath()] = [ file ]
-        else:
-            self.files[file.getPath()].append(file)
-
-    def printFiles(self):
-        retString = ""
-        for key in self.files.keys():
-            tabChr = '\t'
-            retString += f'\n{tabChr * self.files[key][0].tab}{key}'
-            for f in self.files[key]:
-                retString += f.printFile()
-
-    def writeFiles(self, rootDirectory, fileName = "output.json"):
-        outerWrapper = {
-            "root": os.path.abspath(rootDirectory),
-            "type": "file"
-            }
-        allFiles = []
-        for key in self.files.keys():
-            for f in self.files[key]:
-                allFiles.append(f.getFile())
-
-        outerWrapper["files"] = allFiles
-
-        f = open(fileName, "w")
-        f.write(json.dumps(outerWrapper, indent=4, sort_keys=True))
-        f.close()
-
-class folderStructure:
-    def __init__(self):
-        self.folders = dict()
-    
-    def addFile(self, file):
-        if self.folders.get(file.getPath()) == None:
-            self.folders[file.getPath()] = {
-                "path": file.getAdjustedPath(),
-                "absPath": file.getAbsPath(),
-                "size": file.size,
-                "files": 1,
-                "tab": file.tab,
-            }
-        else:
-            self.folders[file.getPath()]["size"] += file.size
-            self.folders[file.getPath()]["files"] += 1
-
-    def printFolders(self):
-        for key in self.folders.keys():
-            tabChr = '\t'
-            return f'{tabChr * self.folders[key]["tab"]}{key}\t{self.folders[key]["path"]} ({self.folders[key]["files"]} - {getSize(self.folders[key]["size"], globalSizeConversion)})'
-
-    def writeFolders(self, rootDirectory, fileName = "output.json"):
-        outerWrapper = {
-            "root": os.path.abspath(rootDirectory),
-            "type": "folder"
-        }
-
-        allFiles = []
-        for key in self.folders.keys():
-            allFiles.append({
-                "path": self.folders[key]["path"],
-                "absPath": self.folders[key]["absPath"],
-                "size": getSize(self.folders[key]["size"], globalSizeConversion),
-                "files": self.folders[key]["files"],
-            })
-
-        outerWrapper["files"] = allFiles
-
-        f = open(fileName, "w")
-        f.write(json.dumps(outerWrapper, indent=4, sort_keys=True))
-        f.close()
-
-class file:
-    def __init__(self, path, fileName, root, tab, size=None):
-        self.path = path
-        self.fileName = fileName
-        if (size == None):
-            self.size = os.path.getsize(os.path.join(path, fileName))
-        else:
-            self.size = size;
-        self.tab = tab
-        self.root = root
-    
-    def getFileName(self):
-        return self.fileName
-
-    def getFullFileName(self):
-        return os.path.join(self.path, self.fileName)
-
-    def getAbsFileName(self):
-        return os.path.abspath(os.path.join(self.path, self.fileName))
- 
-    def getAbsPath(self):
-        # todo: need to return absolute path without the trailing file
-        #return self.getAbsFileName().split(os.path.abspath(self.path))[0]
-        return self.getAbsFileName()
-
-    def getPath(self):
-        return self.path
-
-    def getAdjustedPath(self):
-        path = self.getPath().split(self.root,1)[1]
-        while path != "" and path[0] == "\\" or  path[0] == "/":
-            path = path[1:]
-        return path
-
-    def getCompPath(self):
-        # split root path which search started from, to current directory and remove it from path to get distinct values
-        # remove first character from result as it is just the / character
-        # append it with fileName
-        # the final result gives a path that is more easily comparable with other directories
-        return os.path.join(self.getAdjustedPath(), self.getFileName())
-
-    def getFile(self):
-        return {
-            "path": self.getAdjustedPath(),
-            "absPath": self.getAbsFileName(),
-            "comparablePath": self.getCompPath(),
-            "fileName": self.getFileName(),
-            "size": getSize(self.size, globalSizeConversion)
-        }
-
-    def printFile(self):
-        tabChr = '\t'
-        return f'{tabChr * self.tab}{self.fileName} ({getSize(self.size, globalSizeConversion)})'
+    return {"remote": remote, "user": user, "port": port, "password": password}
 
 
 #============================= DRIVER START =============================
+
+def calcSha256Locally(file):
+    #  never actually use this on big files. It will literally take minutes. Not even going to attempt to support this remotely.
+    calcSha = False
+    if (calcSha):
+        with open(file,"rb") as f:
+            bytes = f.read() # read entire file as bytes
+            readable_hash = hashlib.sha256(bytes).hexdigest()
+            print(readable_hash)
+            return readable_hash
+    return None
 
 def printHelper(shouldPrint, msg):
     if shouldPrint:
@@ -332,28 +213,33 @@ def scanDirectory(currentDir, root, fileStruct, folderStruct, tab):
         if os.path.isdir(nextFile):
             scanDirectory(nextFile, root, fileStruct, folderStruct, tab + 1)
         elif os.path.isfile(nextFile):
+
+            fileSha256 = calcSha256Locally(nextFile)
             fileObj = file(currentDir, fname, root, tab)
             fileStruct.addFile(fileObj)
             folderStruct.addFile(fileObj)
 
-def scanDirectoryRemotely(remoteInput, currentDir, root, fileStruct, tab):
+def scanDirectoryRemotely(remoteInput, currentDir, root, fileStruct, tab, tos):
     printHelper(tdebugger, "Attempting to connect via SSH...")
 
     ssh = SSHClient() 
     ssh.load_host_keys(os.path.expanduser(os.path.join("~", ".ssh", "known_hosts")))
-    ssh.connect(remoteInput["remote"], username=remoteInput["user"])
+    if remoteInput["password"] != None:
+        ssh.connect(remoteInput["remote"], username=remoteInput["user"], password=remoteInput["password"])
+    else:
+        ssh.connect(remoteInput["remote"], username=remoteInput["user"])
     sftp = ssh.open_sftp()
 
     printHelper(tdebugger, f"Connecting to {currentDir}")
 
     # print(sftp.listdir(currentDir))
-    scanRemotely(sftp, currentDir, root, fileStruct, tab)
+    scanRemotely(sftp, currentDir, root, fileStruct, tab, tos)
 
     printHelper(tdebugger, "Closing connections...")
     sftp.close()
     ssh.close()
 
-def scanRemotely(sftp, currentDir, root, fileStruct, tab):
+def scanRemotely(sftp, currentDir, root, fileStruct, tab, tos):
     for entry in sftp.listdir_attr(currentDir):
         # https://stackoverflow.com/questions/70928978/sftp-how-to-list-large-of-files
         # May want to start here next, as I'm not making much progress, and removing a ton of my files just doesn't seem useful
@@ -363,24 +249,31 @@ def scanRemotely(sftp, currentDir, root, fileStruct, tab):
         mode = entry.st_mode
         if S_ISDIR(mode):
             # todo: may need to see if there is a safer way to join these 2, as \\ may not be safe to use for all os's
-            scanRemotely(sftp, currentDir + "\\" + entry.filename, root, fileStruct, tab + 1)
+            if (tos == "win"):
+                scanRemotely(sftp, currentDir + "\\" + entry.filename, root, fileStruct, tab + 1, tos)
+            elif (tos == "linux"):
+                scanRemotely(sftp, currentDir + "/" + entry.filename, root, fileStruct, tab + 1, tos)
+            else:
+                print(tos + " not supported. Only 'win' or 'linux' are supported.")
+                exit()
+            
         elif S_ISREG(mode):
-            fileObj = file(currentDir, entry.filename, root, tab, entry.st_size)
+            fileObj = file(currentDir, entry.filename, root, tab, entry.st_size, tos)
             fileStruct.addFile(fileObj)
 
 
 # parse all arguments into pre-defined variables
-tdirectory, toutput, tquieter, tdebugger, tfolderAnalyze, tsize, tremote = parseAllArgs(args)
+tdirectory, toutput, tquieter, tdebugger, tfolderAnalyze, tsize, tremote, tos = parseAllArgs(args)
 
 globalSizeConversion = tsize
 
-fileStruct = fileStructure()
+fileStruct = fileStructure(tos)
 folderStruct = folderStructure()
 
 printHelper(tdebugger, 'Starting Program..')
 
 if tremote != None:
-    scanDirectoryRemotely(tremote, tdirectory, tdirectory, fileStruct, 0)
+    scanDirectoryRemotely(tremote, tdirectory, tdirectory, fileStruct, 0, tos)
 else:
     # Main Logic for analyzing directory
     scanDirectory(tdirectory, tdirectory, fileStruct, folderStruct, 0)

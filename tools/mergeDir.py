@@ -11,8 +11,8 @@ from paramiko import SSHClient
 
 #============================= DEFINE DEFAULT AND GLOBAL VARIABLES =============================
 # set and initialize variables used throughout the rest of the program
-defaultDeleteConfirmNeeded = True
-defaultMergeConfirmNeeded = True
+defaultDeleteConfirmNeeded = False
+defaultMergeConfirmNeeded = False
 defaultDebugger = False
 defaultForce = False
 defaultQuieter = True
@@ -29,6 +29,7 @@ ap.add_argument("-d", "--debug", help="true/false or t/f supported. This argumen
 ap.add_argument("-r", "--remote", help="Script uses SSH to connect via server url. It's assumed to be local unless this flag is active")
 ap.add_argument("-u", "--user", help="user for remote SSH. Not needed for local usage.")
 ap.add_argument("-p", "--port", help="port for remote SSH. Not needed for local usage.")
+ap.add_argument("-c", "--cred", help="password for remote SSH. Not needed for local usage.")
 args = vars(ap.parse_args())
 
 #============================= DEFINE FUNCTIONS =============================
@@ -108,24 +109,25 @@ def parseRemote(args):
     remote = args["remote"]
     user = args["user"]
     port = args["port"]
+    password = args["cred"]
 
     mergeRemotely = args["mergeOnRemote"]
 
     if mergeRemotely is None:
-        return {"remote": remote, "user": user, "port": port, "mergeRemote": False}
+        return {"remote": remote, "user": user, "port": port, "password": password, "mergeRemote": False}
 
     if mergeRemotely == "true" or mergeRemotely == "t":
         mergeRemotely = True
     elif mergeRemotely == "false" or mergeRemotely == "f":
         mergeRemotely = False
 
-    return {"remote": remote, "user": user, "port": port, "mergeRemote": mergeRemotely}
+    return {"remote": remote, "user": user, "port": port, "password": password, "mergeRemote": mergeRemotely}
 
 
 #============================= DRIVER START =============================
 
 def progressbar(x, y, prePrint = "", postPrint = ""):
-    bar_len = 60
+    bar_len = 100
     filled_len = math.ceil(bar_len * x / float(y))
     percents = math.ceil(100.0 * x / float(y))
     bar = '=' * filled_len + '-' * (bar_len - filled_len)
@@ -149,8 +151,10 @@ def loadJsonFile(file):
 
     mergeKey = instructions["mergeScan"]
     mergeBasePath = instructions["mergeRootPath"]
+    mergeOs = instructions["mergeFilesOs"]
     deleteKey = instructions["deleteScan"]
     deleteBasePath = instructions["deleteRootPath"]
+    deleteOs = instructions["deleteFilesOs"]
 
     if mergeKey == None or deleteKey == None or mergeBasePath == None or deleteBasePath == None :
         print("Error - no scan instructions or base path")
@@ -163,7 +167,7 @@ def loadJsonFile(file):
         print("Error - no object found")
         exit()
 
-    return deletes, merges, deleteBasePath, mergeBasePath
+    return deletes, merges, deleteBasePath, mergeBasePath, deleteOs, mergeOs
 
 def enforceFileType(files):
     for item in files:
@@ -206,7 +210,7 @@ def remoteExists(sftp, path):
     else:
         return True
 
-def removeFiles(tdebug, filesToRemove, removeAbsPath, confirmDeleteNeeded, tremote):
+def removeFiles(tdebug, filesToRemove, removeAbsPath, confirmDeleteNeeded, deleteOs, mergeOs, tremote):
     skipAll = False
     skipNext = False
 
@@ -219,7 +223,12 @@ def removeFiles(tdebug, filesToRemove, removeAbsPath, confirmDeleteNeeded, tremo
     if deleteRemotely and len(filesToRemove) > 0:
         ssh = SSHClient() 
         ssh.load_host_keys(os.path.expanduser(os.path.join("~", ".ssh", "known_hosts")))
-        ssh.connect(tremote["remote"], username=tremote["user"])
+
+        if tremote["password"] != None:
+            ssh.connect(tremote["remote"], username=tremote["user"], password=tremote["password"])
+        else:
+            ssh.connect(tremote["remote"], username=tremote["user"])
+
         sftp = ssh.open_sftp()
 
     for file in filesToRemove:
@@ -256,11 +265,12 @@ def removeFiles(tdebug, filesToRemove, removeAbsPath, confirmDeleteNeeded, tremo
 
     if deleteRemotely and len(filesToRemove) > 0:
         printHelper(tdebug, "Closing connections...")
+        printHelper(not tdebug, "")
         sftp.close()
         ssh.close()
     printHelper(tdebug, f'Deleting files finished')
 
-def mergeFiles(tdebug, filesToMerge, mergeAbsPath, deleteBasePath, confirmMergeNeeded, tremote):
+def mergeFiles(tdebug, filesToMerge, mergeAbsPath, deleteBasePath, confirmMergeNeeded, deleteOs, mergeOs, tremote):
     skipAll = False
     skipNext = False
 
@@ -273,7 +283,12 @@ def mergeFiles(tdebug, filesToMerge, mergeAbsPath, deleteBasePath, confirmMergeN
     if mergeToRemote and len(filesToMerge) > 0:
         ssh = SSHClient() 
         ssh.load_host_keys(os.path.expanduser(os.path.join("~", ".ssh", "known_hosts")))
-        ssh.connect(tremote["remote"], username=tremote["user"])
+
+        if tremote["password"] != None:
+            ssh.connect(tremote["remote"], username=tremote["user"], password=tremote["password"])
+        else:
+            ssh.connect(tremote["remote"], username=tremote["user"])
+
         sftp = ssh.open_sftp()
 
     totalFiles = len(filesToMerge)
@@ -334,27 +349,29 @@ def mergeFiles(tdebug, filesToMerge, mergeAbsPath, deleteBasePath, confirmMergeN
                         ssh.close()
                     exit()
 
-                src = file["absPath"]
-                pathToFile = file["comparablePath"]
-                dst = os.path.join(deleteBasePath, pathToFile)
+                src = file["absPath"] 
+                pathToFile = file["comparablePlainPath"] if deleteOs == "linux" else file["comparablePath"]
+                dst = deleteBasePath + "/" + pathToFile if deleteOs == "linux" else os.path.join(deleteBasePath, pathToFile)
                 dstPath = os.path.dirname(dst)
                 
                 curPath = dstPath
                 pathsToCreate = []
-
+                
                 while not remoteExists(sftp, curPath):
                     # print("CHECKING: " + curPath)
                     pathsToCreate.append(curPath)
                     curPath = os.path.dirname(curPath)
-                    
+
                 while len(pathsToCreate) > 0:
                     sftp.mkdir(pathsToCreate.pop())
- 
+
                 # todo - maybe do some error catching around this
                 #for Uploading file from local to remote machine
                 printHelper(not confirmMergeNeeded, f'MERGED {dst}')
 
                 sftp.put(src, dst, callback=lambda x,y: progressbar(x,y, f"({currentFileNum}/{totalFiles}) "))
+                sys.stdout.flush()
+                sys.stdout.write((' ' * 150) + '\r')
                 sys.stdout.flush()
             else:
                 print("MERGE ERROR - (copying from a remote directory [FALSE]) NOT IMPLEMENTED YET")
@@ -375,7 +392,7 @@ tinput, tforce, tremote, tdebug = parseAllArgs(args)
 
 printHelper(tdebug, 'Starting Program..')
 
-deletes, merges, deleteBasePath, mergeBasePath = loadJsonFile(tinput)
+deletes, merges, deleteBasePath, mergeBasePath, deleteOs, mergeOs = loadJsonFile(tinput)
 
 print(f'\nDelete\t({len(deletes)}):\t{deleteBasePath}')
 print(f'Merge\t({len(merges)}):\t{mergeBasePath}\n')
@@ -383,8 +400,8 @@ print(f'Merge\t({len(merges)}):\t{mergeBasePath}\n')
 enforceFileType(merges)
 enforceFileType(deletes)
 
-removeFiles(tdebug, deletes, deleteBasePath, defaultDeleteConfirmNeeded, tremote)
-mergeFiles(tdebug, merges, mergeBasePath, deleteBasePath, defaultMergeConfirmNeeded, tremote)
+removeFiles(tdebug, deletes, deleteBasePath, defaultDeleteConfirmNeeded, deleteOs, mergeOs, tremote)
+mergeFiles(tdebug, merges, mergeBasePath, deleteBasePath, defaultMergeConfirmNeeded, deleteOs, mergeOs, tremote)
 
 printHelper(tdebug, 'Program Finished')
 

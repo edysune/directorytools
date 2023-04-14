@@ -87,6 +87,7 @@ class FileComparableObj:
 
         if self.fileType == "file":
             self.comparablePath = jsonData['comparablePath'] if "comparablePath" in jsonData else "N/A"
+            self.comparablePlainPath = jsonData['comparablePlainPath'] if "comparablePlainPath" in jsonData else "N/A"
             self.path = jsonData['path'] if "path" in jsonData else "N/A"
             self.absPath = jsonData['absPath'] if "absPath" in jsonData else "N/A"
             self.size = jsonData['size'] if "size" in jsonData else "N/A"
@@ -117,9 +118,12 @@ class FileComparableObj:
 
     def getFileName(self):
         return self.fileName
-   
+
     def getFileType(self):
         return self.fileType
+
+    def getCompPathPlain(self):
+        return self.comparablePlainPath
 
     def getJSON(self):
         if self.getFileType() == "file":     
@@ -129,6 +133,7 @@ class FileComparableObj:
                 "absPath": self.getAbsPath(),
                 "path": self.getPath(),
                 "comparablePath": self.getComparablePath(),
+                "comparablePlainPath": self.getCompPathPlain(),
                 "type": self.getFileType(),
             }
         if self.getFileType() == "folder":     
@@ -154,7 +159,7 @@ class FileComparableObj:
                 return False
             return True
         else:
-            if file1.getComparablePath() != file2.getComparablePath():
+            if file1.getCompPathPlain() != file2.getCompPathPlain():
                 return False
             if file1.getSize() != file2.getSize():
                 return False
@@ -181,6 +186,7 @@ def loadJsonFile(file):
     res = []
     fileType = data['type'].lower()
     fileRoot = data['root']
+    fileOs = data['os']
 
     if fileType != "file" and fileType != "folder":
         print(f"ERROR - file type {fileType} is neither file nor folder. Exiting program..")
@@ -188,9 +194,9 @@ def loadJsonFile(file):
 
     for file in data['files']:
         f = FileComparableObj(file, fileType)
-        resDict[f.getComparablePath()] = f
+        resDict[f.getCompPathPlain()] = f
         res.append(f)
-    return fileType, res, resDict, fileRoot
+    return fileType, res, resDict, fileRoot, fileOs
 
 def enforceFileType(ftype1, ftype2, tinput):
     if ftype1 != ftype2:
@@ -254,17 +260,19 @@ def generateFileDiff(diffList):
 
     return convertedFiles
 
-def writeFileDiff(diffRootA, diffListA, diffRootDirA, fileTypeA, diffRootB, diffListB, diffRootDirB, fileTypeB, fileName):
+def writeFileDiff(diffRootA, diffListA, diffRootDirA, fileTypeA, fileOsA, diffRootB, diffListB, diffRootDirB, fileTypeB, fileOsB, fileName):
     fout = {}
     fout["metadata"] = { "warning": "unsupported features with folders will not allow syncing"} if fileTypeA != fileTypeB or fileTypeA == "folder" else {
         "mergeScan": diffRootA,
         "mergeRootPath": diffRootDirA,
         "mergeFilesNum": len(diffListA),
+        "mergeFilesOs": fileOsA,
         "deleteScan": diffRootB,
         "deleteRootPath": diffRootDirB,
         "deleteFilesNum": len(diffListB),
+        "deleteFilesOs": fileOsB,
     }
-        
+
     # todo: diffRoot's are the jsonfile, not the actual path. Will probably need this.
     fout[diffRootA] = generateFileDiff(diffListA)
     fout[diffRootB] = generateFileDiff(diffListB)
@@ -278,8 +286,8 @@ tinput, toutput, tdebug = parseAllArgs(args)
 
 printHelper(tdebug, 'Starting Program..')
 
-ftype1, files1, filesDict1, rootDir1 = loadJsonFile(tinput[0])
-ftype2, files2, filesDict2, rootDir2= loadJsonFile(tinput[1])
+ftype1, files1, filesDict1, rootDir1, fileOs1 = loadJsonFile(tinput[0])
+ftype2, files2, filesDict2, rootDir2, fileOs2 = loadJsonFile(tinput[1])
 
 printLoad(tinput[0], ftype1, files1)
 printLoad(tinput[1], ftype2, files2)
@@ -293,8 +301,8 @@ diffAToB = findDifferences(tdebug, files1, files2, ftype1 == "folder", filesDict
 diffBToA = findDifferences(tdebug, files2, files1, ftype2 == "folder", filesDict2, filesDict1)
 
 writeFileDiff(
-    tinput[0], diffAToB, rootDir1, ftype1,
-    tinput[1], diffBToA, rootDir2, ftype2,
+    tinput[0], diffAToB, rootDir1, ftype1, fileOs1,
+    tinput[1], diffBToA, rootDir2, ftype2, fileOs2,
     toutput
 )
 
