@@ -127,7 +127,7 @@ def parseRemote(args):
 #============================= DRIVER START =============================
 
 def progressbar(x, y, prePrint = "", postPrint = ""):
-    bar_len = 100
+    bar_len = 50
     filled_len = math.ceil(bar_len * x / float(y))
     percents = math.ceil(100.0 * x / float(y))
     bar = '=' * filled_len + '-' * (bar_len - filled_len)
