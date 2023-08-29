@@ -13,7 +13,7 @@ See `example_scripts` for examples of working scripts both in powershell and bas
     <put_example_script_here>\directorytools\tools
 ```
 
-Note that these may need modifications for paths for your own directory system. The main script `executeRemoteMerge` has required userName, password and domain that will need to be set.
+Note that these may need modifications for paths for your own directory system. The main script `executeRemoteMerge` has required userName, password and domain that will need to be set. Domains will need to be added in the `etc/hosts` file, which depends based 
 
 # scanDir
 Basic tool that generates a recursive list of files given a folder path parameter. This works both locally and remotely (using SSH username + password), and works with both Windows and Linux OS's. By default, scanDir operating system is set to `win`, which may need to set via commandline flags. Example of usage:
@@ -41,9 +41,9 @@ Merges will attempt to merge differences between 2 file systems, copying strictl
 
 ```
     py .\scanDir.py -p ..\test_dir\a1\ -o to.json -os "linux"
-    py .\scanDir.py -p /test/test_dir/a2/ -o from.json -os "win" -r 192.168.0.55 -u myusername -c somepassword123 -os "win"
+    py .\scanDir.py -p /test/test_dir/a2/ -o from.json -os "win" -r test.com -u myusername -c somepassword123 -os "win"
     py .\compareDir.py -i .\output1.json .\from.json -o to.diff.json
-    py .\mergeDir.py -i output.diff.json -r 192.168.0.55 -u myusername -c somepassword123 -os "linux" -mr "false" --confirmMerge "true" --confirmDelete "true"
+    py .\mergeDir.py -i output.diff.json -r test.com -u myusername -c somepassword123 -os "linux" -mr "false" --confirmMerge "true" --confirmDelete "true"
 ```
 
 Above describes `..\test_dir\a1\`, a local linux path on the machine that is currently running the script, copying and deleting it's files to match `/test/test_dir/a2/`, a windows path accessible via SSH. Only `..\test_dir\a1\` will change,  since `--confirmMerge "true" --confirmDelete "true"` are set, user must manually approve of each file change (recommened until your scripts are working to avoid unwanted loss of data).
@@ -54,3 +54,14 @@ Removes empty directories recursively given a source path. May not be fully work
 ```
     py .\cleanUpDir.py -d $path -r 192.168.0.55 -u myusername -c somepassword123 -os "win"
 ```
+
+# trouble-shooting tips
+
+## Cannot run scripts (linux)
+Scripts provided may have had line-endings added, use following command in the same directory of bash scripts to remove windows line-endings:
+```
+    sed -i -e 's/\r$//' *.sh
+```
+
+## Scripts error: <domain> not found in known_hosts
+May need to add your domain to the `known_hosts`. The easiest way would be to just ssh manually before running the scripts.
