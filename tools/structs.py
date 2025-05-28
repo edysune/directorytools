@@ -146,6 +146,16 @@ class file:
 
     def getAdjustedPath(self):
         path = self.getPath().split(self.root,1)[1]
+
+        if path == None or path == "" or len(path) == 0:
+            print("===================> Detecting Potential Issue? <===================")
+            print("path", self.getPath())
+            print("absPath", self.getAbsFileName())
+            # print("comparablePath", self.getCompPath())
+            # print("comparablePlainPath", self.getCompPathPlain())
+            print("fileName", self.getFileName())
+            # print("size", getSize(self.size, self.sizeConversion))
+
         while path != "" and path[0] == "\\" or  path[0] == "/":
             path = path[1:]
         return path
