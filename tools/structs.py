@@ -158,6 +158,7 @@ class file:
 
         while path != "" and path[0] == "\\" or  path[0] == "/":
             path = path[1:]
+        print("path", path)
         return path
 
     def getCompPath(self):
