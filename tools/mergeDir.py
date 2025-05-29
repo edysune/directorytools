@@ -16,6 +16,7 @@ defaultMergeConfirmNeeded = True
 defaultDebugger = False
 defaultForce = False
 defaultQuieter = True
+isSilent = False
 validTypes = ["file"]
 menuString = "(Y) To Confirm\t(N) Skip file\t(A) Abort\t(S) Skip All\t(C) Confirm All\n"
 
@@ -32,6 +33,7 @@ ap.add_argument("-p", "--port", help="port for remote SSH. Not needed for local 
 ap.add_argument("-c", "--cred", help="password for remote SSH. Not needed for local usage.")
 ap.add_argument("-y", "--confirmDelete", help="confirm file before deleting.")
 ap.add_argument("-z", "--confirmMerge", help="confirm file before merging.")
+ap.add_argument("-s", "--silent", help="true or t supported. This argument silences some console output messages while merging or deleting.")
 args = vars(ap.parse_args())
 
 #============================= DEFINE FUNCTIONS =============================
@@ -42,6 +44,8 @@ def parseAllArgs(args):
     tremote = parseRemote(args)
     tdebug = parseDebug(args)
     tconfirm = parseConfirmations(args)
+    if args["silent"] is not None and args["silent"].lower() == "true" or args["silent"].lower() == "t":
+        isSilent = True
     return tinput, tforce, tremote, tdebug, tconfirm
 
 #Preconditions: None
@@ -293,10 +297,10 @@ def removeFiles(tdebug, filesToRemove, removeAbsPath, confirmDeleteNeeded, delet
                         ssh.close()
                     exit()
                 os.remove(file["absPath"])
-                printHelper(not confirmDeleteNeeded, f'DELETED {file["absPath"]}')
+                printHelper(not confirmDeleteNeeded and not isSilent, f'DELETED {file["absPath"]}')
             elif tremote["mergeRemote"]:
                 sftp.remove(file["absPath"])
-                printHelper(not confirmDeleteNeeded, f'DELETED {file["absPath"]}')
+                printHelper(not confirmDeleteNeeded and not isSilent, f'DELETED {file["absPath"]}')
 
     if deleteRemotely and len(filesToRemove) > 0:
         printHelper(tdebug, "Closing connections...")
@@ -402,7 +406,7 @@ def mergeFiles(tdebug, filesToMerge, mergeAbsPath, deleteBasePath, confirmMergeN
                     sftp.mkdir(pathsToCreate.pop())
 
                 # todo - maybe do some error catching around this
-                printHelper(not confirmMergeNeeded, f'MERGED {dst}')
+                printHelper(not confirmMergeNeeded and not isSilent, f'MERGED {dst}')
 
                 sftp.put(src, dst, callback=lambda x,y: progressbar(x,y, f"({currentFileNum}/{totalFiles}) "))
                 sys.stdout.flush()
@@ -431,7 +435,7 @@ def mergeFiles(tdebug, filesToMerge, mergeAbsPath, deleteBasePath, confirmMergeN
                     os.makedirs(dstPath)
 
                 # todo - maybe do some error catching around this  
-                printHelper(not confirmMergeNeeded, f'MERGED {dst}')
+                printHelper(not confirmMergeNeeded and not isSilent, f'MERGED {dst}')
 
                 sftp.get(src, dst, callback=lambda x,y: progressbar(x,y, f"({currentFileNum}/{totalFiles}) "))
                 sys.stdout.flush()
