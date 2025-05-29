@@ -44,9 +44,13 @@ def parseAllArgs(args):
     tremote = parseRemote(args)
     tdebug = parseDebug(args)
     tconfirm = parseConfirmations(args)
-    if args["silent"] is not None and args["silent"].lower() == "true" or args["silent"].lower() == "t":
-        isSilent = True
-    return tinput, tforce, tremote, tdebug, tconfirm
+    parseSilent(args)
+
+def parseSilent(args) :
+    if args["silent"] is None:
+        isSilent = false
+    else:
+        isSilent = args["silent"].lower() == "true" or args["silent"].lower() == "t"
 
 #Preconditions: None
 #Postconditions: None
