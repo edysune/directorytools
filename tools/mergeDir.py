@@ -46,9 +46,9 @@ def parseAllArgs(args):
     tconfirm = parseConfirmations(args)
     parseSilent(args)
 
-def parseSilent(args) :
+def parseSilent(args):
     if args["silent"] is None:
-        isSilent = false
+        isSilent = False
     else:
         isSilent = args["silent"].lower() == "true" or args["silent"].lower() == "t"
 
