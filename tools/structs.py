@@ -146,13 +146,6 @@ class file:
 
     def getAdjustedPath(self):
         if self.isFileInRootDir():
-            print("===================> Detecting Potential Issue? <===================")
-            print("path", self.getPath())
-            print("absPath", self.getAbsFileName())
-            # print("comparablePath", self.getCompPath())
-            # print("comparablePlainPath", self.getCompPathPlain())
-            print("fileName", self.getFileName())
-            # print("size", getSize(self.size, self.sizeConversion))
             return ""
 
         path = self.getPath().split(self.root,1)[1]
