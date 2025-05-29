@@ -45,6 +45,7 @@ def parseAllArgs(args):
     tdebug = parseDebug(args)
     tconfirm = parseConfirmations(args)
     parseSilent(args)
+    return tinput, tforce, tremote, tdebug, tconfirm
 
 def parseSilent(args):
     if args["silent"] is None:
