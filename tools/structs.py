@@ -145,12 +145,18 @@ class file:
         return self.path
 
     def getAdjustedPath(self):
+        if self.isFileInRootDir():
+            return ""
+
         path = self.getPath().split(self.root,1)[1]
         while path != "" and path[0] == "\\" or  path[0] == "/":
             path = path[1:]
+        # print("path", path)
         return path
 
     def getCompPath(self):
+        if self.isFileInRootDir():
+            return self.getFileName()
         # split root path which search started from, to current directory and remove it from path to get distinct values
         # remove first character from result as it is just the / character
         # append it with fileName
@@ -159,6 +165,12 @@ class file:
         if self.os == "linux":
             tdir = self.getAdjustedPath() + "/" + self.getFileName()
         return str(pathlib.PurePosixPath(tdir)) if self.os == "linux" else tdir
+
+    def isFileInRootDir(self):
+        # workaround for files in root folder to compare that are not in ANY folders directly
+        path = self.getPath().split(self.root,1)[1]
+        return path == None or path == "" or len(path) == 0
+
 
     def getCompPathPlain(self):
         return self.getCompPath().replace("\\", "/")
