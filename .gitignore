@@ -2,3 +2,4 @@
 tools/*.json
 results
 tools/__pycache__
+tools/output/
