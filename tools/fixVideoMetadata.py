@@ -1,10 +1,11 @@
+
 #!/usr/bin/env python3
-"""Shim forwarding to tools/video_audio_scripts/analyzeVideoMetadata.py"""
+"""Shim forwarding to tools/video_audio_scripts/fixVideoMetadata.py"""
 from pathlib import Path
 import subprocess
 import sys
 
-script = Path(__file__).resolve().parent / "video_audio_scripts" / "analyzeVideoMetadata.py"
+script = Path(__file__).resolve().parent / "video_audio_scripts" / "fixVideoMetadata.py"
 if not script.exists():
     print(f"Moved script not found: {script}")
     sys.exit(1)

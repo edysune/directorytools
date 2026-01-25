@@ -3,3 +3,6 @@ tools/*.json
 results
 tools/__pycache__
 tools/output/
+tools/video_audio_scripts/output
+tools/video_audio_scripts/__pycache__/
+tests/__pycache__/
