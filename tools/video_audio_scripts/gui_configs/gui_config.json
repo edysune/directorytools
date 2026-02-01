@@ -1,6 +1,11 @@
 {
-  "last_directory": "/home/robit/Downloads/A Condition Called Love (2024)",
-  "force_ass_ssa_conversion": false,
-  "keep_original_files": false,
-  "last_updated": "2026-01-24T21:43:30.349041"
+  "last_directory": "/mnt/A18001/plex/anime_c",
+  "keep_original_files": true,
+  "delete_previous_output_auto": true,
+  "subtitle_whitelist": "English, Japanese",
+  "allowed_subtitle_types": "SRT, ASS, SSA",
+  "default_audio_language": "English",
+  "audio_whitelist": "English, Japanese, Korean",
+  "attempt_identify_unknown_audio": true,
+  "last_updated": "2026-01-31T22:15:49.138399"
 }

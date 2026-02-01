@@ -22,41 +22,6 @@ from datetime import datetime
 from pathlib import Path
 
 
-def is_english(lang: str) -> bool:
-    if not lang:
-        return False
-    s = str(lang).lower().strip()
-    if s in ("unknown", "", "none"):
-        return False
-    if s.startswith("en") or "eng" in s or s == "english":
-        return True
-    return False
-
-
-def matches_any(lang: str, patterns) -> bool:
-    if not lang or not patterns:
-        return False
-    s = str(lang).lower().strip()
-    # common alias expansions
-    aliases = {
-        "jpn": ["jpn", "ja", "jp", "japanese", "japan"],
-        "eng": ["eng", "en", "english"],
-    }
-
-    for pat in patterns:
-        if not pat:
-            continue
-        p = str(pat).lower().strip()
-        variants = [p]
-        if p in aliases:
-            variants.extend(aliases[p])
-        # also allow plain words like 'japan' -> match 'japan' in strings
-        for v in variants:
-            if s == v or s.startswith(v) or v in s:
-                return True
-    return False
-
-
 def find_latest_scan_file(output_dir: Path) -> Path:
     # Only consider files that begin with the prefix 'scan_'
     pattern = re.compile(r"scan_.*_(\d{4}-\d{2}-\d{2}T[0-9\-\.:]+)\.json$")
@@ -106,8 +71,32 @@ def write_output(prefix: str, base_scan_path: Path, data):
     return out_path
 
 
-def analyze(scan_json: dict, ignore_patterns=None, require_default_english=False):
+def analyze(scan_json: dict, subtitle_whitelist=None, default_audio_language=None, audio_whitelist=None):
+    """Analyze scan results using configuration-based rules.
+    
+    Args:
+        scan_json: Scan results dictionary
+        subtitle_whitelist: List/string of languages to keep in subtitles (e.g., "English, Spanish")
+        default_audio_language: Preferred default audio language (e.g., "English")
+        audio_whitelist: List/string of languages to keep in audio (e.g., "English, Spanish")
+    
+    Returns:
+        Tuple of (default_audio_issues, subtitle_issues, unknown_issues, timing_issues)
+    """
     results = scan_json.get("results") or []
+    
+    # Parse configuration parameters
+    def parse_language_list(value):
+        """Parse language list from string or list format."""
+        if isinstance(value, str):
+            return [lang.strip() for lang in value.split(",") if lang.strip()]
+        elif isinstance(value, list):
+            return value
+        return []
+    
+    subtitle_langs = parse_language_list(subtitle_whitelist) or ["English"]
+    default_audio_lang = (default_audio_language.strip() if isinstance(default_audio_language, str) else "English") or "English"
+    audio_langs = parse_language_list(audio_whitelist) or ["English"]
 
     default_audio_issues = []
     subtitle_issues = []
@@ -119,36 +108,88 @@ def analyze(scan_json: dict, ignore_patterns=None, require_default_english=False
         audio_streams = item.get("audio_streams") or []
         subtitle_streams = item.get("subtitle_streams") or []
 
-        # Check default audio not English but has some English audio
-        default_non_eng = False
-        has_english_audio = False
+        # ===== AUDIO ANALYSIS =====
+        # Check if default audio is not in the preferred language
+        default_audio_lang_lower = default_audio_lang.lower().strip()
+        default_non_preferred = False
+        has_preferred_audio = False
+        
         for a in audio_streams:
             lang = a.get("language")
-            if a.get("default") and not is_english(lang) and not matches_any(lang, ignore_patterns):
-                default_non_eng = True
-            if is_english(lang):
-                has_english_audio = True
-
-        if default_non_eng and has_english_audio:
+            lang_lower = str(lang).lower().strip() if lang else ""
+            
+            # Check if this is the default stream and not the preferred language
+            if a.get("default"):
+                if lang_lower not in (default_audio_lang_lower, "unknown", "", "none"):
+                    # Check if preferred language is in the language name
+                    if not (default_audio_lang_lower in lang_lower or lang_lower in default_audio_lang_lower):
+                        default_non_preferred = True
+            
+            # Check if we have a stream in the preferred language
+            if lang_lower in (default_audio_lang_lower, "unknown") or default_audio_lang_lower in lang_lower or lang_lower in default_audio_lang_lower:
+                has_preferred_audio = True
+        
+        # Mark if default is not preferred but preferred audio exists
+        if default_non_preferred and has_preferred_audio:
             e = dict(item)
-            e["analyze_issue"] = "default_audio_non_english_but_has_english_stream"
+            e["analyze_issue"] = "default_audio_not_preferred_but_has_preferred_stream"
+            default_audio_issues.append(e)
+        
+        # Check for audio streams not in whitelist (excluding unknown)
+        audio_to_remove = []
+        if len(audio_streams) > 1:  # Only if there are multiple streams
+            for a in audio_streams:
+                lang = a.get("language")
+                lang_lower = str(lang).lower().strip() if lang else ""
+                
+                # Skip unknown language streams
+                if lang_lower in ("unknown", "", "none"):
+                    continue
+                
+                # Check if this language is in the whitelist
+                is_whitelisted = False
+                for whitelist_lang in audio_langs:
+                    whitelist_lower = whitelist_lang.lower().strip()
+                    if lang_lower == whitelist_lower or whitelist_lower in lang_lower or lang_lower in whitelist_lower:
+                        is_whitelisted = True
+                        break
+                
+                if not is_whitelisted:
+                    audio_to_remove.append(a)
+        
+        # Only flag for removal if we won't remove all audio streams
+        if audio_to_remove and len(audio_to_remove) < len(audio_streams):
+            e = dict(item)
+            e["analyze_issue"] = "audio_streams_not_in_whitelist"
+            e["streams_to_remove"] = audio_to_remove
             default_audio_issues.append(e)
 
-        # If requested, mark any file whose default audio is not English
-        # (regardless of whether it also contains English streams) so it
-        # appears in the analyze_default_audio output.
-        if require_default_english and default_non_eng:
-            existing_paths = {d.get("path") for d in default_audio_issues}
-            if item.get("path") not in existing_paths:
-                e = dict(item)
-                e["analyze_issue"] = "default_audio_not_english"
-                default_audio_issues.append(e)
-
-        # Check subtitles that are not English
-        non_eng_subs = [s for s in subtitle_streams if not is_english(s.get("language")) and not matches_any(s.get("language"), ignore_patterns)]
-        if non_eng_subs:
+        # ===== SUBTITLE ANALYSIS =====
+        # Check subtitles that are not in the whitelist
+        non_whitelisted_subs = []
+        for s in subtitle_streams:
+            lang = s.get("language")
+            lang_lower = str(lang).lower().strip() if lang else ""
+            
+            # Skip unknown subtitle languages
+            if lang_lower in ("unknown", "", "none"):
+                continue
+            
+            # Check if this language is in the subtitle whitelist
+            is_whitelisted = False
+            for whitelist_lang in subtitle_langs:
+                whitelist_lower = whitelist_lang.lower().strip()
+                if lang_lower == whitelist_lower or whitelist_lower in lang_lower or lang_lower in whitelist_lower:
+                    is_whitelisted = True
+                    break
+            
+            if not is_whitelisted:
+                non_whitelisted_subs.append(s)
+        
+        if non_whitelisted_subs:
             e = dict(item)
-            e["analyze_issue"] = "subtitle_non_english_present"
+            e["analyze_issue"] = "subtitle_not_in_whitelist"
+            e["subtitles_to_remove"] = non_whitelisted_subs
             subtitle_issues.append(e)
 
         # Check unknown audio or subtitle
@@ -215,11 +256,190 @@ def analyze(scan_json: dict, ignore_patterns=None, require_default_english=False
     return default_audio_issues, subtitle_issues, unknown_issues, timing_issues
 
 
+def analyze_subtitle_whitelist(scan_json: dict, subtitle_whitelist=None):
+    """Analyze subtitles against whitelist - focused analysis.
+    
+    Returns:
+        List of items with subtitle_not_in_whitelist issues
+    """
+    results = scan_json.get("results") or []
+    
+    def parse_language_list(value):
+        if isinstance(value, str):
+            return [lang.strip() for lang in value.split(",") if lang.strip()]
+        elif isinstance(value, list):
+            return value
+        return []
+    
+    subtitle_langs = parse_language_list(subtitle_whitelist) or ["English"]
+    issues = []
+    
+    for item in results:
+        subtitle_streams = item.get("subtitle_streams") or []
+        non_whitelisted_subs = []
+        
+        for s in subtitle_streams:
+            lang = s.get("language")
+            lang_lower = str(lang).lower().strip() if lang else ""
+            
+            if lang_lower in ("unknown", "", "none"):
+                continue
+            
+            is_whitelisted = False
+            for whitelist_lang in subtitle_langs:
+                whitelist_lower = whitelist_lang.lower().strip()
+                if lang_lower == whitelist_lower or whitelist_lower in lang_lower or lang_lower in whitelist_lower:
+                    is_whitelisted = True
+                    break
+            
+            if not is_whitelisted:
+                non_whitelisted_subs.append(s)
+        
+        if non_whitelisted_subs:
+            e = dict(item)
+            e["analyze_issue"] = "subtitle_not_in_whitelist"
+            e["subtitles_to_remove"] = non_whitelisted_subs
+            issues.append(e)
+    
+    return issues
+
+
+def analyze_allowed_subtitle_types(scan_json: dict, allowed_subtitle_types=None):
+    """Analyze subtitle formats against allowed types - focused analysis.
+    
+    Returns:
+        List of items with incompatible_subtitle_format issues
+    """
+    results = scan_json.get("results") or []
+    
+    codec_to_format = {
+        'subrip': 'SRT',
+        'ass': 'ASS',
+        'ssa': 'SSA',
+        'webvtt': 'VTT',
+        'microdvd': 'SUB',
+        'subviewer': 'SBV',
+        'json': 'JSON',
+        'hdmv_pgs_subtitle': 'PGS',
+        'dvd_subtitle': 'DVD',
+        'dvdsub': 'DVD',
+    }
+    
+    allowed_types_str = allowed_subtitle_types or "SRT"
+    allowed_types = {t.strip().upper() for t in str(allowed_types_str).split(",")}
+    
+    issues = []
+    
+    for item in results:
+        subtitle_streams = item.get("subtitle_streams") or []
+        incompatible_subs = []
+        
+        for sub in subtitle_streams:
+            codec = sub.get("codec") or ""
+            codec_lower = codec.lower() if codec else ""
+            fmt_type = codec_to_format.get(codec_lower)
+            
+            if fmt_type and fmt_type not in allowed_types:
+                incompatible_subs.append({
+                    "index": sub.get("index"),
+                    "codec": codec_lower,
+                    "codec_name": fmt_type,
+                    "language": sub.get("language"),
+                })
+        
+        if incompatible_subs:
+            e = dict(item)
+            e["analyze_issue"] = "incompatible_subtitle_format"
+            e["incompatible_subtitles"] = incompatible_subs
+            issues.append(e)
+    
+    return issues
+
+
+def analyze_default_audio(scan_json: dict, default_audio_language=None):
+    """Analyze default audio language - focused analysis.
+    
+    Returns:
+        List of items with default_audio issues
+    """
+    results = scan_json.get("results") or []
+    default_audio_lang = (default_audio_language.strip() if isinstance(default_audio_language, str) else "English") or "English"
+    default_audio_lang_lower = default_audio_lang.lower().strip()
+    issues = []
+    
+    for item in results:
+        audio_streams = item.get("audio_streams") or []
+        default_non_preferred = False
+        has_preferred_audio = False
+        
+        for a in audio_streams:
+            lang = a.get("language")
+            lang_lower = str(lang).lower().strip() if lang else ""
+            
+            if a.get("default"):
+                if lang_lower not in (default_audio_lang_lower, "unknown", "", "none"):
+                    if not (default_audio_lang_lower in lang_lower or lang_lower in default_audio_lang_lower):
+                        default_non_preferred = True
+            
+            if lang_lower in (default_audio_lang_lower, "unknown") or default_audio_lang_lower in lang_lower or lang_lower in default_audio_lang_lower:
+                has_preferred_audio = True
+        
+        if default_non_preferred and has_preferred_audio:
+            e = dict(item)
+            e["analyze_issue"] = "default_audio_not_preferred"
+            issues.append(e)
+    
+    return issues
+
+
+def analyze_audio_whitelist(scan_json: dict, audio_whitelist=None):
+    """Analyze audio streams against whitelist - focused analysis.
+    
+    Returns:
+        List of items with audio_streams_not_in_whitelist issues
+    """
+    from fixVideoMetadata import language_matches_whitelist
+    
+    results = scan_json.get("results") or []
+    
+    def parse_language_list(value):
+        if isinstance(value, str):
+            return [lang.strip() for lang in value.split(",") if lang.strip()]
+        elif isinstance(value, list):
+            return value
+        return []
+    
+    audio_langs_str = parse_language_list(audio_whitelist) or ["English"]
+    audio_whitelist_str = ", ".join(audio_langs_str)  # Convert to string format for language_matches_whitelist
+    issues = []
+    
+    for item in results:
+        audio_streams = item.get("audio_streams") or []
+        audio_to_remove = []
+        
+        for a in audio_streams:
+            lang = a.get("language")
+            
+            if not lang or str(lang).lower().strip() in ("unknown", "", "none"):
+                continue
+            
+            # Use the robust language matching function
+            if not language_matches_whitelist(lang, audio_whitelist_str):
+                audio_to_remove.append(a)
+        
+        # Only add to issues if there are audio streams to remove AND at least 1 would remain
+        if audio_to_remove and len(audio_to_remove) < len(audio_streams):
+            e = dict(item)
+            e["analyze_issue"] = "audio_streams_not_in_whitelist"
+            e["streams_to_remove"] = audio_to_remove
+            issues.append(e)
+    
+    return issues
+
+
 def main():
     p = argparse.ArgumentParser(description="Analyze previous scan JSON for audio/subtitle issues")
     p.add_argument("file", nargs="?", help="Path to scan JSON file (defaults to latest in ./tools/output)")
-    p.add_argument("--ignore-language", "-i", action="append", help="Language to ignore (e.g. 'jpn' or 'Japan'). Can be provided multiple times or comma-separated.")
-    p.add_argument("--require-default-english", action="store_true", help="If set, files whose default audio is not English will be flagged into analyze_default_audio.")
     args = p.parse_args()
 
     repo_root = Path(__file__).resolve().parent.parent
@@ -243,18 +463,7 @@ def main():
 
     scan = load_scan(input_path)
 
-    # normalize ignore patterns: flatten and split comma-separated entries
-    ignore_patterns = []
-    if args.ignore_language:
-        for entry in args.ignore_language:
-            for part in str(entry).split(","):
-                v = part.strip()
-                if v:
-                    ignore_patterns.append(v)
-
-    default_audio_issues, subtitle_issues, unknown_issues, timing_issues = analyze(
-        scan, ignore_patterns, require_default_english=args.require_default_english
-    )
+    default_audio_issues, subtitle_issues, unknown_issues, timing_issues = analyze(scan)
 
     base_scan_path = input_path
 

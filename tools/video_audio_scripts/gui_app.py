@@ -16,26 +16,55 @@ from tkinter import filedialog, messagebox, ttk
 
 # Import scan and analyze functionality
 from scanVideoMetadata import walk_and_scan, is_video_file
-from analyzeVideoMetadata import analyze, find_latest_scan_file, load_scan, write_output
+from analyzeVideoMetadata import (
+    analyze, find_latest_scan_file, load_scan, write_output,
+    analyze_subtitle_whitelist, analyze_allowed_subtitle_types,
+    analyze_default_audio, analyze_audio_whitelist
+)
 from fixVideoMetadata import (
-    load_json, attempt_set_default_audio, attempt_identify_unknown, backup_file_before_fix
+    load_json, attempt_set_default_audio, attempt_identify_unknown, backup_file_before_fix,
+    attempt_remove_non_whitelisted_audio
 )
 
 
-def attempt_remove_non_english_subs_fixed(item: dict, keep_backup=True):
-    """Fixed version of subtitle removal that uses proper temp file extension."""
+def attempt_remove_non_english_subs_fixed(item: dict, subtitle_whitelist: str = "English", keep_backup=True):
+    """Remove subtitles that don't match the subtitle whitelist.
+    
+    Args:
+        item: Video metadata dictionary with subtitle_streams
+        subtitle_whitelist: Comma-separated list of languages to keep (e.g., "English, Japanese")
+        keep_backup: Whether to create backup before modifying
+    
+    Returns:
+        True if changes were made, False otherwise
+    """
     import subprocess
     import shutil
     from pathlib import Path
     
-    def is_english(lang: str) -> bool:
-        if not lang:
+    def language_matches_whitelist(lang: str, whitelist: str) -> bool:
+        """Check if a language matches any language in the whitelist."""
+        if not lang or not whitelist:
             return False
-        s = str(lang).lower().strip()
-        if s in ("unknown", "", "none"):
-            return False
-        if s.startswith("en") or "eng" in s or s == "english":
-            return True
+        
+        lang_lower = str(lang).lower().strip()
+        preferred_langs = [l.lower().strip() for l in str(whitelist).split(",")]
+        
+        for pref in preferred_langs:
+            if pref in ("unknown", "", "none"):
+                continue
+            # Check exact match
+            if lang_lower == pref:
+                return True
+            # Check if language contains the code (e.g., "eng" in "English" or vice versa)
+            if pref in lang_lower or lang_lower in pref:
+                return True
+            # Check language code prefix for 2-letter codes (e.g., "en" matches "English" at start)
+            if len(lang_lower) == 2 and pref.startswith(lang_lower):
+                return True
+            if len(pref) == 2 and lang_lower.startswith(pref):
+                return True
+        
         return False
     
     path = item.get("path")
@@ -52,8 +81,8 @@ def attempt_remove_non_english_subs_fixed(item: dict, keep_backup=True):
             print(f"Subtitle with unknown language in {path}; skipping removal for this file.")
             return False
 
-    # identify non-english subtitle positions (0-based among subtitle streams)
-    remove_positions = [i for i, s in enumerate(subs) if not is_english(s.get("language"))]
+    # identify non-whitelisted subtitle positions (0-based among subtitle streams)
+    remove_positions = [i for i, s in enumerate(subs) if not language_matches_whitelist(s.get("language"), subtitle_whitelist)]
     if not remove_positions:
         return False  # No changes needed
 
@@ -73,7 +102,7 @@ def attempt_remove_non_english_subs_fixed(item: dict, keep_backup=True):
         cmd += ["-c", "copy", tmp]
         subprocess.run(cmd, check=True, capture_output=True)
         shutil.move(tmp, path)
-        print(f"Removed non-English subtitles from {path}")
+        print(f"Removed non-whitelisted subtitles from {path}")
         return True  # Changes made successfully
     except Exception as e:
         print(f"Failed to remove subtitles via ffmpeg: {e}")
@@ -309,6 +338,63 @@ def clean_files(directory: str) -> tuple:
     return len(original_files), success_count, error_list
 
 
+class MultiSelectListbox:
+    """A custom multiselect listbox widget."""
+    def __init__(self, parent, items, selected=None, colors=None, height=5):
+        self.parent = parent
+        self.items = items
+        # Normalize selected items - strip whitespace and match case-insensitively
+        self.selected = set()
+        if selected:
+            for sel_item in selected:
+                sel_normalized = sel_item.strip()
+                # Find exact match in items (case-sensitive after normalization)
+                for item in items:
+                    if item.strip() == sel_normalized:
+                        self.selected.add(item)
+                        break
+        
+        self.colors = colors or {}
+        self.height = height
+        
+        # Create frame
+        self.frame = tk.Frame(parent)
+        
+        # Create scrollbar
+        scrollbar = tk.Scrollbar(self.frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Create listbox
+        self.listbox = tk.Listbox(
+            self.frame,
+            selectmode=tk.MULTIPLE,
+            yscrollcommand=scrollbar.set,
+            height=height,
+            bg=self.colors.get('entry_bg', '#3c3c3c'),
+            fg=self.colors.get('fg', '#e0e0e0'),
+            selectbackground=self.colors.get('highlight', '#4a6fa5'),
+            highlightthickness=0,
+            borderwidth=1,
+            relief=tk.SOLID,
+            exportselection=False
+        )
+        scrollbar.config(command=self.listbox.yview)
+        self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Populate listbox
+        for i, item in enumerate(self.items):
+            self.listbox.insert(tk.END, item)
+            if item in self.selected:
+                self.listbox.selection_set(i)
+    
+    def pack(self, **kwargs):
+        self.frame.pack(**kwargs)
+    
+    def get_selected(self):
+        """Get list of selected items."""
+        return [self.items[i] for i in self.listbox.curselection()]
+
+
 class VideoAudioGUI:
     def __init__(self, root):
         self.root = root
@@ -347,14 +433,30 @@ class VideoAudioGUI:
         self.last_scan_file = None
         
         # Initialize setting variables
-        self.force_ass_ssa_conversion = tk.BooleanVar(value=False)
         self.keep_original_files = tk.BooleanVar(value=True)
+        self.delete_previous_output_auto = tk.BooleanVar(value=False)
+        self.attempt_identify_unknown_audio = tk.BooleanVar(value=False)
+        
+        # Language and format lists
+        self.language_list = ["English", "Spanish", "French", "German", "Italian", "Portuguese", "Russian", "Japanese", "Chinese", "Korean"]
+        self.subtitle_formats = ["SRT", "ASS", "SSA", "VTT", "SUB", "SBV", "JSON"]
+        
+        # Subtitle Settings
+        self.subtitle_whitelist = tk.StringVar(value="English")
+        self.allowed_subtitle_types = tk.StringVar(value="SRT")
+        
+        # Audio Settings
+        self.default_audio_language = tk.StringVar(value="English")
+        self.audio_whitelist = tk.StringVar(value="English")
         
         # Create widgets first (needed for log_message)
         self.create_widgets()
         
         # Load existing config after widgets are created
         self.config = self.load_config()
+        
+        # Update menu visibility based on backup setting
+        self.update_file_management_menu_visibility()
         
         # Selected directory
         if self.config.get("last_directory"):
@@ -413,8 +515,8 @@ class VideoAudioGUI:
         menubar.add_cascade(label="Settings", menu=settings_menu)
         settings_menu.add_command(label="Open Settings", command=self.open_settings_dialog)
         
-        # File Management menu
-        file_mgmt_menu = tk.Menu(
+        # Additional Scripts menu
+        self.file_mgmt_menu = tk.Menu(
             menubar,
             tearoff=0,
             bg=self.colors['button_bg'],
@@ -422,9 +524,12 @@ class VideoAudioGUI:
             activebackground=self.colors['highlight'],
             activeforeground=self.colors['button_fg']
         )
-        menubar.add_cascade(label="File Management", menu=file_mgmt_menu)
-        file_mgmt_menu.add_command(label="Revert to Originals", command=self.revert_originals)
-        file_mgmt_menu.add_command(label="Clean Backups", command=self.clean_backups)
+        self.file_mgmt_menu_index = menubar.add_cascade(label="Additional Scripts", menu=self.file_mgmt_menu)
+        self.file_mgmt_menu.add_command(label="Revert to Originals", command=self.revert_originals)
+        self.file_mgmt_menu.add_command(label="Clean Backups", command=self.clean_backups)
+        self.file_mgmt_menu.add_separator()
+        self.file_mgmt_menu.add_command(label="Clear Output", command=self.clear_output_files)
+        self.menubar = menubar
         
         # Main frame
         main_frame = ttk.Frame(self.root, padding="10")
@@ -762,6 +867,15 @@ class VideoAudioGUI:
         except Exception:
             return False
     
+    def update_file_management_menu_visibility(self):
+        """Show or hide File Management menu based on keep_original_files setting."""
+        if self.keep_original_files.get():
+            # Show the menu
+            self.menubar.entryconfig("Additional Scripts", state=tk.NORMAL)
+        else:
+            # Hide the menu
+            self.menubar.entryconfig("Additional Scripts", state=tk.DISABLED)
+    
     def load_config(self):
         """Load configuration from JSON file."""
         if self.config_file.exists():
@@ -771,8 +885,31 @@ class VideoAudioGUI:
                     self.log_message("Configuration loaded")
                     
                     # Load settings
-                    self.force_ass_ssa_conversion.set(config.get("force_ass_ssa_conversion", False))
                     self.keep_original_files.set(config.get("keep_original_files", True))
+                    
+                    # Load subtitle settings - store as comma-separated strings
+                    subtitle_whitelist = config.get("subtitle_whitelist", "English")
+                    if subtitle_whitelist:
+                        self.subtitle_whitelist.set(subtitle_whitelist)
+                    
+                    allowed_types = config.get("allowed_subtitle_types", "SRT")
+                    if allowed_types:
+                        self.allowed_subtitle_types.set(allowed_types)
+                    
+                    # Load audio settings - store as comma-separated strings
+                    default_audio = config.get("default_audio_language", "English")
+                    if default_audio:
+                        self.default_audio_language.set(default_audio)
+                    
+                    audio_whitelist = config.get("audio_whitelist", "English")
+                    if audio_whitelist:
+                        self.audio_whitelist.set(audio_whitelist)
+                    
+                    # Load audio analysis settings
+                    self.attempt_identify_unknown_audio.set(config.get("attempt_identify_unknown_audio", False))
+                    
+                    # Load backup settings
+                    self.delete_previous_output_auto.set(config.get("delete_previous_output_auto", False))
                     
                     return config
             except Exception as e:
@@ -785,8 +922,13 @@ class VideoAudioGUI:
         try:
             config_data = {
                 "last_directory": self.selected_directory.get(),
-                "force_ass_ssa_conversion": self.force_ass_ssa_conversion.get(),
                 "keep_original_files": self.keep_original_files.get(),
+                "delete_previous_output_auto": self.delete_previous_output_auto.get(),
+                "subtitle_whitelist": self.subtitle_whitelist.get(),
+                "allowed_subtitle_types": self.allowed_subtitle_types.get(),
+                "default_audio_language": self.default_audio_language.get(),
+                "audio_whitelist": self.audio_whitelist.get(),
+                "attempt_identify_unknown_audio": self.attempt_identify_unknown_audio.get(),
                 "last_updated": datetime.now().isoformat(),
             }
             
@@ -892,6 +1034,55 @@ class VideoAudioGUI:
             self.update_cleanup_buttons()
         except Exception as e:
             messagebox.showerror("Cleanup Error", f"Failed to clean backups: {e}")
+    
+    def clear_output_files(self):
+        """Clear all JSON files from the output folder."""
+        # Show confirmation dialog
+        response = messagebox.askokcancel(
+            "Clear Output Files",
+            f"This will delete all JSON files in the output folder:\n\n"
+            f"- {self.output_dir}\n"
+            f"- This cannot be undone\n"
+            f"- Fix Issues will be disabled until new analysis is run\n\n"
+            f"Are you sure you want to proceed?"
+        )
+        
+        if not response:
+            return
+        
+        self.log_message("Clearing output files...")
+        try:
+            json_files = list(self.output_dir.glob("*.json"))
+            if not json_files:
+                messagebox.showinfo("No Output Files", "No JSON files found in output folder")
+                self.log_message("No output files to clear")
+                return
+            
+            # Delete all JSON files
+            deleted_count = 0
+            errors = []
+            for json_file in json_files:
+                try:
+                    json_file.unlink()
+                    deleted_count += 1
+                except Exception as e:
+                    errors.append((json_file.name, str(e)))
+            
+            # Log results
+            self.log_message(f"Removed {deleted_count} output file(s)")
+            
+            # Disable Fix Issues button since analysis files are gone
+            self.fix_btn.config(state=tk.DISABLED)
+            self._set_status("Output cleared - Analysis needed", 0)
+            
+            if errors:
+                error_msg = "Errors occurred while deleting files:\n" + "\n".join(f"{f}: {e}" for f, e in errors[:5])
+                if len(errors) > 5:
+                    error_msg += f"\n... and {len(errors) - 5} more errors"
+                messagebox.showwarning("Deletion Errors", error_msg)
+        
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to clear output files: {e}")
     
     def log_message(self, message):
         """Add a message to the log output."""
@@ -1023,10 +1214,10 @@ class VideoAudioGUI:
         self.fix_btn.config(state=state)
     
     def open_settings_dialog(self):
-        """Open settings dialog window."""
+        """Open settings dialog window with multiple sections."""
         dialog = tk.Toplevel(self.root)
         dialog.title("Settings")
-        dialog.geometry("500x200")
+        dialog.geometry("600x700")
         dialog.resizable(False, False)
         
         # Center dialog on parent window
@@ -1036,41 +1227,181 @@ class VideoAudioGUI:
         # Configure dark background
         dialog.configure(bg=self.colors['bg'])
         
-        # Settings frame with dark mode
-        settings_frame = tk.Frame(dialog, bg=self.colors['frame_bg'], relief=tk.FLAT, borderwidth=1)
-        settings_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Create main scrollable frame
+        main_frame = tk.Frame(dialog, bg=self.colors['bg'])
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        settings_label = tk.Label(
-            settings_frame,
-            text="Settings",
-            bg=self.colors['frame_bg'],
-            fg=self.colors['fg'],
-            font=("Arial", 10, "bold")
+        # Scroll canvas
+        canvas = tk.Canvas(main_frame, bg=self.colors['bg'], highlightthickness=0)
+        scrollbar = tk.Scrollbar(main_frame, command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg=self.colors['bg'])
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
-        settings_label.pack(anchor=tk.W, padx=10, pady=(5, 0))
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         # Create local copies of settings for the dialog
-        force_ass_var = tk.BooleanVar(value=self.force_ass_ssa_conversion.get())
         keep_backup_var = tk.BooleanVar(value=self.keep_original_files.get())
+        delete_output_var = tk.BooleanVar(value=self.delete_previous_output_auto.get())
         
-        # Checkbox frame
-        checkbox_frame = tk.Frame(settings_frame, bg=self.colors['frame_bg'])
-        checkbox_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)
+        # Parse multiselect values - strip whitespace from each item
+        def parse_multiselect(value_str):
+            """Parse comma-separated string into list of stripped values."""
+            if not value_str or not value_str.strip():
+                return []
+            return [item.strip() for item in value_str.split(",")]
         
-        cb1 = tk.Checkbutton(
-            checkbox_frame,
-            text="Force ASS/SSA to SRT Subtitle Conversions",
-            variable=force_ass_var,
+        subtitle_whitelist_selected = parse_multiselect(self.subtitle_whitelist.get())
+        if not subtitle_whitelist_selected:
+            subtitle_whitelist_selected = ["English"]
+            
+        allowed_types_selected = parse_multiselect(self.allowed_subtitle_types.get())
+        if not allowed_types_selected:
+            allowed_types_selected = ["SRT"]
+            
+        audio_whitelist_selected = parse_multiselect(self.audio_whitelist.get())
+        if not audio_whitelist_selected:
+            audio_whitelist_selected = ["English"]
+        
+        # ===== SUBTITLE SETTINGS SECTION =====
+        subtitle_label = tk.Label(
+            scrollable_frame,
+            text="Subtitle Settings",
+            bg=self.colors['bg'],
+            fg=self.colors['fg'],
+            font=("Arial", 11, "bold")
+        )
+        subtitle_label.pack(anchor=tk.W, padx=10, pady=(10, 5))
+        
+        subtitle_frame = tk.Frame(scrollable_frame, bg=self.colors['frame_bg'], relief=tk.FLAT, borderwidth=1)
+        subtitle_frame.pack(fill=tk.BOTH, expand=False, padx=10, pady=(0, 10))
+        
+        # Subtitle Whitelist
+        sub_wl_label = tk.Label(
+            subtitle_frame,
+            text="Subtitle Whitelist (Languages to Keep):",
             bg=self.colors['frame_bg'],
             fg=self.colors['fg'],
-            selectcolor=self.colors['highlight'],
+            font=("Arial", 9)
+        )
+        sub_wl_label.pack(anchor=tk.W, padx=10, pady=(10, 5))
+        
+        sub_wl_listbox = MultiSelectListbox(
+            subtitle_frame,
+            self.language_list,
+            selected=subtitle_whitelist_selected,
+            colors=self.colors,
+            height=3
+        )
+        sub_wl_listbox.pack(fill=tk.BOTH, padx=10, pady=(0, 10))
+        
+        # Allowed Subtitle Types
+        sub_types_label = tk.Label(
+            subtitle_frame,
+            text="Allowed Subtitle Types:",
+            bg=self.colors['frame_bg'],
+            fg=self.colors['fg'],
+            font=("Arial", 9)
+        )
+        sub_types_label.pack(anchor=tk.W, padx=10, pady=(0, 5))
+        
+        sub_types_listbox = MultiSelectListbox(
+            subtitle_frame,
+            self.subtitle_formats,
+            selected=allowed_types_selected,
+            colors=self.colors,
+            height=3
+        )
+        sub_types_listbox.pack(fill=tk.BOTH, padx=10, pady=(0, 10))
+        
+        # ===== AUDIO SETTINGS SECTION =====
+        audio_label = tk.Label(
+            scrollable_frame,
+            text="Audio Settings",
+            bg=self.colors['bg'],
+            fg=self.colors['fg'],
+            font=("Arial", 11, "bold")
+        )
+        audio_label.pack(anchor=tk.W, padx=10, pady=(10, 5))
+        
+        audio_frame = tk.Frame(scrollable_frame, bg=self.colors['frame_bg'], relief=tk.FLAT, borderwidth=1)
+        audio_frame.pack(fill=tk.BOTH, expand=False, padx=10, pady=(0, 10))
+        
+        # Default Audio Language (single select)
+        default_audio_label = tk.Label(
+            audio_frame,
+            text="Default Audio Language:",
+            bg=self.colors['frame_bg'],
+            fg=self.colors['fg'],
+            font=("Arial", 9)
+        )
+        default_audio_label.pack(anchor=tk.W, padx=10, pady=(10, 5))
+        
+        default_audio_var = tk.StringVar(value=self.default_audio_language.get())
+        default_audio_combo = ttk.Combobox(
+            audio_frame,
+            textvariable=default_audio_var,
+            values=self.language_list,
+            state="readonly",
+            width=30
+        )
+        default_audio_combo.pack(anchor=tk.W, padx=10, pady=(0, 10))
+        
+        # Audio Whitelist
+        audio_wl_label = tk.Label(
+            audio_frame,
+            text="Audio Whitelist (Languages to Keep):",
+            bg=self.colors['frame_bg'],
+            fg=self.colors['fg'],
+            font=("Arial", 9)
+        )
+        audio_wl_label.pack(anchor=tk.W, padx=10, pady=(0, 5))
+        
+        audio_wl_listbox = MultiSelectListbox(
+            audio_frame,
+            self.language_list,
+            selected=audio_whitelist_selected,
+            colors=self.colors,
+            height=3
+        )
+        audio_wl_listbox.pack(fill=tk.BOTH, padx=10, pady=(0, 10))
+        
+        # Attempt to Identify Unknown Audio Streams
+        attempt_identify_var = tk.BooleanVar(value=self.attempt_identify_unknown_audio.get())
+        attempt_identify_check = tk.Checkbutton(
+            audio_frame,
+            text="Attempt to Identify Unknown Audio Streams",
+            variable=attempt_identify_var,
+            bg=self.colors['frame_bg'],
+            fg=self.colors['fg'],
+            selectcolor=self.colors['frame_bg'],
             activebackground=self.colors['frame_bg'],
             activeforeground=self.colors['fg']
         )
-        cb1.pack(anchor=tk.W, pady=5)
+        attempt_identify_check.pack(anchor=tk.W, padx=10, pady=(0, 10))
         
-        cb2 = tk.Checkbutton(
-            checkbox_frame,
+        # ===== BACKUP SETTINGS SECTION =====
+        backup_label = tk.Label(
+            scrollable_frame,
+            text="Backup Settings",
+            bg=self.colors['bg'],
+            fg=self.colors['fg'],
+            font=("Arial", 11, "bold")
+        )
+        backup_label.pack(anchor=tk.W, padx=10, pady=(10, 5))
+        
+        backup_frame = tk.Frame(scrollable_frame, bg=self.colors['frame_bg'], relief=tk.FLAT, borderwidth=1)
+        backup_frame.pack(fill=tk.BOTH, expand=False, padx=10, pady=(0, 10))
+        
+        cb_keep_backup = tk.Checkbutton(
+            backup_frame,
             text="Keep Original Files (Create Backups)",
             variable=keep_backup_var,
             bg=self.colors['frame_bg'],
@@ -1079,16 +1410,49 @@ class VideoAudioGUI:
             activebackground=self.colors['frame_bg'],
             activeforeground=self.colors['fg']
         )
-        cb2.pack(anchor=tk.W, pady=5)
+        cb_keep_backup.pack(anchor=tk.W, padx=10, pady=10)
         
-        # Button frame
+        cb_delete_output = tk.Checkbutton(
+            backup_frame,
+            text="Delete Previous Output Automatically",
+            variable=delete_output_var,
+            bg=self.colors['frame_bg'],
+            fg=self.colors['fg'],
+            selectcolor=self.colors['highlight'],
+            activebackground=self.colors['frame_bg'],
+            activeforeground=self.colors['fg']
+        )
+        cb_delete_output.pack(anchor=tk.W, padx=10, pady=(0, 10))
+        
+        # ===== BUTTON FRAME =====
         button_frame = tk.Frame(dialog, bg=self.colors['bg'])
         button_frame.pack(pady=(0, 10))
         
         def save_settings():
-            self.force_ass_ssa_conversion.set(force_ass_var.get())
+            # Save basic settings
             self.keep_original_files.set(keep_backup_var.get())
+            self.delete_previous_output_auto.set(delete_output_var.get())
+            
+            # Save multiselect settings
+            subtitle_wl = sub_wl_listbox.get_selected()
+            self.subtitle_whitelist.set(", ".join(subtitle_wl) if subtitle_wl else "English")
+            
+            allowed_types = sub_types_listbox.get_selected()
+            self.allowed_subtitle_types.set(", ".join(allowed_types) if allowed_types else "SRT")
+            
+            self.default_audio_language.set(default_audio_var.get())
+            
+            audio_wl = audio_wl_listbox.get_selected()
+            self.audio_whitelist.set(", ".join(audio_wl) if audio_wl else "English")
+            
+            self.attempt_identify_unknown_audio.set(attempt_identify_var.get())
+            
+            # Save to config file
             self.save_config()
+            
+            # Update menu visibility based on new backup setting
+            self.update_file_management_menu_visibility()
+            
             self.log_message("Settings saved")
             dialog.destroy()
         
@@ -1122,9 +1486,9 @@ class VideoAudioGUI:
         cancel_btn.pack(side=tk.LEFT, padx=5)
     
     def open_file_management_dialog(self):
-        """Open file management dialog window."""
+        """Open backup management dialog window."""
         dialog = tk.Toplevel(self.root)
-        dialog.title("File Management")
+        dialog.title("Backup Management")
         dialog.geometry("400x180")
         dialog.resizable(False, False)
         
@@ -1135,13 +1499,13 @@ class VideoAudioGUI:
         # Configure dark background
         dialog.configure(bg=self.colors['bg'])
         
-        # File management frame with dark mode
+        # Backup management frame with dark mode
         mgmt_frame = tk.Frame(dialog, bg=self.colors['frame_bg'], relief=tk.FLAT, borderwidth=1)
         mgmt_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         mgmt_label = tk.Label(
             mgmt_frame,
-            text="File Management",
+            text="Backup Management",
             bg=self.colors['frame_bg'],
             fg=self.colors['fg'],
             font=("Arial", 10, "bold")
@@ -1234,6 +1598,20 @@ class VideoAudioGUI:
     def _run_scan_and_analyze(self, dir_path):
         """Run scan and analyze in background thread."""
         try:
+            # Clear previous output files if setting is enabled
+            if self.delete_previous_output_auto.get():
+                json_files = list(self.output_dir.glob("*.json"))
+                if json_files:
+                    deleted_count = 0
+                    for json_file in json_files:
+                        try:
+                            json_file.unlink()
+                            deleted_count += 1
+                        except Exception:
+                            pass
+                    if deleted_count > 0:
+                        self.root.after(0, lambda d=deleted_count: self.log_message(f"Cleared {d} previous output file(s)"))
+            
             # === SCAN PHASE ===
             self.log_message("Discovering video files...")
             results = walk_and_scan(dir_path)
@@ -1270,24 +1648,48 @@ class VideoAudioGUI:
             self.root.after(0, lambda: self.log_message("Starting analysis..."))
             
             try:
-                # Load scan data and analyze
+                # Load scan data
                 self.root.after(0, lambda: self.log_message("Loading scan data..."))
                 scan_data = load_scan(scan_out_path)
                 
-                self.root.after(0, lambda: self.log_message("Running analysis..."))
-                default_audio_issues, subtitle_issues, unknown_issues, timing_issues = analyze(
-                    scan_data,
-                    ignore_patterns=None,
-                    require_default_english=False
-                )
-                self.root.after(0, lambda: self.log_message("Analysis complete, processing results..."))
-                
-                # Additional analysis: Check for incompatible subtitle formats
-                incompatible_sub_issues = self._analyze_subtitle_formats(scan_data)
-                
-                # Save results
+                self.root.after(0, lambda: self.log_message("Running focused analyses..."))
                 outputs = []
                 
+                # 1. Analyze subtitle whitelist
+                subtitle_whitelist_issues = analyze_subtitle_whitelist(
+                    scan_data,
+                    subtitle_whitelist=self.subtitle_whitelist.get()
+                )
+                payload = {
+                    "source": str(scan_out_path),
+                    "generated_utc": datetime.utcnow().isoformat() + "Z",
+                    "count": len(subtitle_whitelist_issues),
+                    "results": subtitle_whitelist_issues,
+                }
+                out = write_output("analyze_subtitle_whitelist", scan_out_path, payload)
+                if len(subtitle_whitelist_issues) > 0:
+                    outputs.append(("Subtitle Whitelist Issues", len(subtitle_whitelist_issues), out))
+                
+                # 2. Analyze allowed subtitle types
+                allowed_types_issues = analyze_allowed_subtitle_types(
+                    scan_data,
+                    allowed_subtitle_types=self.allowed_subtitle_types.get()
+                )
+                payload = {
+                    "source": str(scan_out_path),
+                    "generated_utc": datetime.utcnow().isoformat() + "Z",
+                    "count": len(allowed_types_issues),
+                    "results": allowed_types_issues,
+                }
+                out = write_output("analyze_allowed_subtitle_types", scan_out_path, payload)
+                if len(allowed_types_issues) > 0:
+                    outputs.append(("Incompatible Subtitle Formats", len(allowed_types_issues), out))
+                
+                # 3. Analyze default audio language
+                default_audio_issues = analyze_default_audio(
+                    scan_data,
+                    default_audio_language=self.default_audio_language.get()
+                )
                 payload = {
                     "source": str(scan_out_path),
                     "generated_utc": datetime.utcnow().isoformat() + "Z",
@@ -1298,35 +1700,49 @@ class VideoAudioGUI:
                 if len(default_audio_issues) > 0:
                     outputs.append(("Default Audio Issues", len(default_audio_issues), out))
                 
+                # 4. Analyze audio whitelist
+                audio_whitelist_issues = analyze_audio_whitelist(
+                    scan_data,
+                    audio_whitelist=self.audio_whitelist.get()
+                )
                 payload = {
                     "source": str(scan_out_path),
                     "generated_utc": datetime.utcnow().isoformat() + "Z",
-                    "count": len(subtitle_issues),
-                    "results": subtitle_issues,
+                    "count": len(audio_whitelist_issues),
+                    "results": audio_whitelist_issues,
                 }
-                out = write_output("analyze_subtitle", scan_out_path, payload)
-                if len(subtitle_issues) > 0:
-                    outputs.append(("Subtitle Issues", len(subtitle_issues), out))
+                out = write_output("analyze_audio_whitelist", scan_out_path, payload)
+                if len(audio_whitelist_issues) > 0:
+                    outputs.append(("Audio Whitelist Issues", len(audio_whitelist_issues), out))
                 
-                payload = {
-                    "source": str(scan_out_path),
-                    "generated_utc": datetime.utcnow().isoformat() + "Z",
-                    "count": len(unknown_issues),
-                    "results": unknown_issues,
-                }
-                out = write_output("analyze_unknown", scan_out_path, payload)
-                if len(unknown_issues) > 0:
-                    outputs.append(("Unknown Language Issues", len(unknown_issues), out))
+                self.root.after(0, lambda: self.log_message("Analysis complete, processing results..."))
                 
-                payload = {
-                    "source": str(scan_out_path),
-                    "generated_utc": datetime.utcnow().isoformat() + "Z",
-                    "count": len(incompatible_sub_issues),
-                    "results": incompatible_sub_issues,
-                }
-                out = write_output("analyze_incompatible_subtitles", scan_out_path, payload)
-                if len(incompatible_sub_issues) > 0:
-                    outputs.append(("Incompatible Subtitle Formats", len(incompatible_sub_issues), out))
+                # Keep original analyze call for remaining analyses (only if needed)
+                if self.attempt_identify_unknown_audio.get():
+                    default_audio_issues_full, subtitle_issues_full, unknown_issues, timing_issues = analyze(
+                        scan_data,
+                        subtitle_whitelist=self.subtitle_whitelist.get(),
+                        default_audio_language=self.default_audio_language.get(),
+                        audio_whitelist=self.audio_whitelist.get()
+                    )
+                else:
+                    unknown_issues = []
+                
+                # Additional analysis: Check for incompatible subtitle formats (deprecated - now handled by analyze_allowed_subtitle_types)
+
+                # Note: incompatible subtitle formats are now handled by analyze_allowed_subtitle_types
+                
+                # Also generate output for unknown and timing issues (if setting enabled)
+                if self.attempt_identify_unknown_audio.get():
+                    payload = {
+                        "source": str(scan_out_path),
+                        "generated_utc": datetime.utcnow().isoformat() + "Z",
+                        "count": len(unknown_issues),
+                        "results": unknown_issues,
+                    }
+                    out = write_output("analyze_unknown", scan_out_path, payload)
+                    if len(unknown_issues) > 0:
+                        outputs.append(("Unknown Language Issues", len(unknown_issues), out))
                 
                 self.root.after(0, lambda: self._scan_and_analyze_complete(results, outputs, str(scan_out_path)))
                 
@@ -1398,11 +1814,14 @@ class VideoAudioGUI:
             scan_data = load_scan(scan_file)
             
             self.root.after(0, lambda: self.log_message("Analyzing for issues..."))
-            # Run analysis with no ignore patterns and no require_default_english
+            # Run analysis with configuration-based rules
             default_audio_issues, subtitle_issues, unknown_issues, timing_issues = analyze(
                 scan_data, 
                 ignore_patterns=None, 
-                require_default_english=False
+                require_default_english=False,
+                subtitle_whitelist=self.subtitle_whitelist.get(),
+                default_audio_language=self.default_audio_language.get(),
+                audio_whitelist=self.audio_whitelist.get()
             )
             
             # Additional analysis: Check for incompatible subtitle formats
@@ -1492,23 +1911,30 @@ class VideoAudioGUI:
         messagebox.showerror("Analysis Error", error_msg)
     
     def _analyze_subtitle_formats(self, scan_data):
-        """Analyze subtitle formats for compatibility issues."""
-        # Build incompatible codecs list based on settings
+        """Analyze subtitle formats based on allowed_subtitle_types setting."""
+        # Map codec names to format types
+        codec_to_format = {
+            'subrip': 'SRT',
+            'ass': 'ASS',
+            'ssa': 'SSA',
+            'webvtt': 'VTT',
+            'microdvd': 'SUB',
+            'subviewer': 'SBV',
+            'json': 'JSON',
+            'hdmv_pgs_subtitle': 'PGS',
+            'dvd_subtitle': 'DVD',
+            'dvdsub': 'DVD',
+        }
+        
+        # Parse allowed subtitle types from config (case-insensitive)
+        allowed_types_str = self.allowed_subtitle_types.get()
+        allowed_types = {t.strip().upper() for t in allowed_types_str.split(",")}
+        
+        # Build incompatible codecs list - codecs NOT in allowed types
         incompatible_codecs = {}
-        
-        # Always include image-based formats
-        incompatible_codecs.update({
-            'hdmv_pgs_subtitle': 'PGS/SUP (Image-based)',
-            'dvd_subtitle': 'DVD Subtitles (Image-based)',
-            'dvdsub': 'DVD Subtitles (Image-based)',
-        })
-        
-        # Include ASS/SSA only if force conversion is enabled
-        if self.force_ass_ssa_conversion.get():
-            incompatible_codecs.update({
-                'ass': 'Advanced SubStation Alpha (ASS)',
-                'ssa': 'SubStation Alpha (SSA)',
-            })
+        for codec, fmt_type in codec_to_format.items():
+            if fmt_type not in allowed_types:
+                incompatible_codecs[codec] = fmt_type
         
         results = scan_data.get("results") or []
         issues = []
@@ -1544,19 +1970,22 @@ class VideoAudioGUI:
     
     def fix_issues(self):
         """Fix issues found in the analysis."""
-        # Check if any analyze files exist
+        # Check if any analyze files exist with new naming convention
+        subtitle_whitelist_file = self.find_latest_analyze("subtitle_whitelist")
+        allowed_types_file = self.find_latest_analyze("allowed_subtitle_types")
         default_audio_file = self.find_latest_analyze("default_audio")
-        subtitle_file = self.find_latest_analyze("subtitle")
+        audio_whitelist_file = self.find_latest_analyze("audio_whitelist")
         unknown_file = self.find_latest_analyze("unknown")
-        incompatible_sub_file = self.find_latest_analyze("incompatible_subtitles")
         
         # Check if any of these files have actual issues
         has_issues = False
+        if subtitle_whitelist_file and self._file_has_results(subtitle_whitelist_file):
+            has_issues = True
+        if allowed_types_file and self._file_has_results(allowed_types_file):
+            has_issues = True
         if default_audio_file and self._file_has_results(default_audio_file):
             has_issues = True
-        if subtitle_file and self._file_has_results(subtitle_file):
-            has_issues = True
-        if incompatible_sub_file and self._file_has_results(incompatible_sub_file):
+        if audio_whitelist_file and self._file_has_results(audio_whitelist_file):
             has_issues = True
         if unknown_file and self._file_has_results(unknown_file):
             has_issues = True
@@ -1576,7 +2005,7 @@ class VideoAudioGUI:
             scan_mtime = Path(scan_file).stat().st_mtime
             
             # Check if any analyze files are older than the scan
-            analyze_files = [f for f in [default_audio_file, subtitle_file, unknown_file, incompatible_sub_file] if f]
+            analyze_files = [f for f in [subtitle_whitelist_file, allowed_types_file, default_audio_file, audio_whitelist_file, unknown_file] if f]
             stale_files = []
             for af in analyze_files:
                 if Path(af).stat().st_mtime < scan_mtime:
@@ -1596,20 +2025,25 @@ class VideoAudioGUI:
         
         # Show confirmation dialog with available fix options
         fix_options = {}
+        if subtitle_whitelist_file and self._file_has_results(subtitle_whitelist_file):
+            fix_options['subtitle_whitelist'] = {
+                'label': 'Remove non-whitelisted subtitles',
+                'file': subtitle_whitelist_file
+            }
+        if allowed_types_file and self._file_has_results(allowed_types_file):
+            fix_options['allowed_types'] = {
+                'label': 'Convert incompatible subtitle formats',
+                'file': allowed_types_file
+            }
         if default_audio_file and self._file_has_results(default_audio_file):
             fix_options['default_audio'] = {
-                'label': 'Set English audio as default',
+                'label': 'Set preferred audio as default',
                 'file': default_audio_file
             }
-        if subtitle_file and self._file_has_results(subtitle_file):
-            fix_options['subtitle'] = {
-                'label': 'Remove non-English subtitles',
-                'file': subtitle_file
-            }
-        if incompatible_sub_file and self._file_has_results(incompatible_sub_file):
-            fix_options['incompatible_sub'] = {
-                'label': 'Convert incompatible subtitle formats (ASS→SRT)',
-                'file': incompatible_sub_file
+        if audio_whitelist_file and self._file_has_results(audio_whitelist_file):
+            fix_options['audio_whitelist'] = {
+                'label': 'Remove non-whitelisted audio streams',
+                'file': audio_whitelist_file
             }
         if unknown_file and self._file_has_results(unknown_file):
             fix_options['unknown'] = {
@@ -1716,10 +2150,10 @@ class VideoAudioGUI:
             total_fixed = 0
             total_failed = 0
             
-            # Fix default audio issues
-            if 'default_audio' in selected_fixes:
-                self.root.after(0, lambda: self.log_message("Processing default audio fixes..."))
-                data = load_json(selected_fixes['default_audio'])
+            # Fix subtitle whitelist issues (remove non-whitelisted subtitles)
+            if 'subtitle_whitelist' in selected_fixes:
+                self.root.after(0, lambda: self.log_message("Processing subtitle whitelist fixes..."))
+                data = load_json(selected_fixes['subtitle_whitelist'])
                 results = data.get("results") or []
                 
                 for idx, item in enumerate(results, 1):
@@ -1727,21 +2161,20 @@ class VideoAudioGUI:
                     pct = int((idx / len(results)) * 100) if results else 0
                     self.root.after(0, lambda i=idx, t=len(results), p=pct: self._set_status(f"Fixing issues... ({i}/{t})", p))
                     try:
-                        changed = attempt_set_default_audio(item)
+                        changed = attempt_remove_non_english_subs_fixed(item, subtitle_whitelist=self.subtitle_whitelist.get(), keep_backup=self.keep_original_files.get())
                         if changed:
                             self.root.after(0, lambda p=path: self.log_message(f"  Fixed: {Path(p).name}"))
                             total_fixed += 1
                         else:
-                            self.root.after(0, lambda p=path: self.log_message(f"  Skipped: {Path(p).name} (already fixed or no English audio)"))
+                            self.root.after(0, lambda p=path: self.log_message(f"  Skipped (no changes needed): {Path(p).name}"))
                     except Exception as e:
                         self.root.after(0, lambda p=path, err=e: self.log_message(f"  Failed: {Path(p).name} - {err}"))
                         total_failed += 1
             
-            # IMPORTANT: Convert incompatible subtitle formats BEFORE removing non-English subtitles
-            # This ensures all original streams are present when we extract/convert, preventing stream index errors
-            if 'incompatible_sub' in selected_fixes:
+            # Fix allowed subtitle types (convert incompatible formats)
+            if 'allowed_types' in selected_fixes:
                 self.root.after(0, lambda: self.log_message("Processing subtitle format conversions..."))
-                data = load_json(selected_fixes['incompatible_sub'])
+                data = load_json(selected_fixes['allowed_types'])
                 results = data.get("results") or []
                 
                 for idx, item in enumerate(results, 1):
@@ -1759,10 +2192,10 @@ class VideoAudioGUI:
                         self.root.after(0, lambda p=path, err=e: self.log_message(f"  Failed: {Path(p).name} - {err}"))
                         total_failed += 1
             
-            # Fix subtitle issues (remove non-English subtitles) - do this AFTER format conversion
-            if 'subtitle' in selected_fixes:
-                self.root.after(0, lambda: self.log_message("Processing subtitle fixes..."))
-                data = load_json(selected_fixes['subtitle'])
+            # Fix default audio issues
+            if 'default_audio' in selected_fixes:
+                self.root.after(0, lambda: self.log_message("Processing default audio fixes..."))
+                data = load_json(selected_fixes['default_audio'])
                 results = data.get("results") or []
                 
                 for idx, item in enumerate(results, 1):
@@ -1770,12 +2203,30 @@ class VideoAudioGUI:
                     pct = int((idx / len(results)) * 100) if results else 0
                     self.root.after(0, lambda i=idx, t=len(results), p=pct: self._set_status(f"Fixing issues... ({i}/{t})", p))
                     try:
-                        changed = attempt_remove_non_english_subs_fixed(item, keep_backup=self.keep_original_files.get())
+                        changed = attempt_set_default_audio(item, default_audio_language=self.default_audio_language.get())
                         if changed:
                             self.root.after(0, lambda p=path: self.log_message(f"  Fixed: {Path(p).name}"))
                             total_fixed += 1
                         else:
-                            self.root.after(0, lambda p=path: self.log_message(f"  Skipped (no changes needed): {Path(p).name}"))
+                            self.root.after(0, lambda p=path: self.log_message(f"  Skipped: {Path(p).name} (already fixed)"))
+                    except Exception as e:
+                        self.root.after(0, lambda p=path, err=e: self.log_message(f"  Failed: {Path(p).name} - {err}"))
+                        total_failed += 1
+            
+            # Fix audio whitelist issues (remove non-whitelisted audio streams)
+            if 'audio_whitelist' in selected_fixes:
+                self.root.after(0, lambda: self.log_message("Processing audio whitelist fixes..."))
+                data = load_json(selected_fixes['audio_whitelist'])
+                results = data.get("results") or []
+                
+                for idx, item in enumerate(results, 1):
+                    path = item.get("path")
+                    pct = int((idx / len(results)) * 100) if results else 0
+                    self.root.after(0, lambda i=idx, t=len(results), p=pct: self._set_status(f"Fixing issues... ({i}/{t})", p))
+                    try:
+                        attempt_remove_non_whitelisted_audio(item, audio_whitelist=self.audio_whitelist.get())
+                        self.root.after(0, lambda p=path: self.log_message(f"  Fixed: {Path(p).name}"))
+                        total_fixed += 1
                     except Exception as e:
                         self.root.after(0, lambda p=path, err=e: self.log_message(f"  Failed: {Path(p).name} - {err}"))
                         total_failed += 1
