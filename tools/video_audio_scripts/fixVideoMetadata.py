@@ -127,8 +127,16 @@ def prompt_choice(prompt: str):
             return v
 
 
-def backup_file_before_fix(path: str):
-    """Create a backup copy with -original suffix before modifying."""
+def backup_file_before_fix(path: str, keep_backup: bool = True):
+    """Create a backup copy with -original suffix before modifying.
+    
+    Args:
+        path: Path to the file to backup
+        keep_backup: If False, skip creating a backup
+    """
+    if not keep_backup:
+        return
+    
     file_path = Path(path)
     name_parts = file_path.name.rsplit(".", 1)
     if len(name_parts) == 2:
@@ -143,46 +151,117 @@ def backup_file_before_fix(path: str):
         print(f"Created backup: {backup_path}")
 
 
-def attempt_set_default_audio(item: dict, default_audio_language: str = "English"):
+def attempt_set_default_audio(item: dict, default_audio_language: str = "English", keep_backup: bool = True):
+    """Set the default audio track to the preferred language.
+    
+    Args:
+        item: Scan result dict with audio_streams
+        default_audio_language: Preferred audio language (e.g., "English")
+        keep_backup: Whether to create a backup before modifying
+    
+    Returns:
+        Dict with keys: success (bool), previous (str), new (str) for logging
+    """
     path = item.get("path")
     fmt = item.get("format", "")
     audio_streams = item.get("audio_streams") or []
     preferred_stream = None
-    for a in audio_streams:
+    preferred_idx = None
+    old_default = None
+    
+    # Find current default and preferred streams
+    for idx, a in enumerate(audio_streams):
+        if a.get("default"):
+            old_default = a.get("language", "unknown")
         if language_matches_whitelist(a.get("language"), default_audio_language):
             preferred_stream = a
-            break
+            preferred_idx = idx
 
     if not preferred_stream:
         print(f"No {default_audio_language} audio streams for {path}; skipping.")
-        return False
+        return {"success": False}
 
     if preferred_stream.get("default"):
         print(f"{default_audio_language} audio already default for {path}; skipping.")
-        return False
+        return {"success": False}
 
     # Create backup before making changes
-    backup_file_before_fix(path)
-
+    backup_file_before_fix(path, keep_backup=keep_backup)
+    
+    preferred_lang = preferred_stream.get("language", "unknown")
+    
     # Attempt container-specific commands
     if "matroska" in fmt:
-        # use mkvpropedit to set default flags
-        cmds = []
-        # set chosen stream default=1
-        idx = preferred_stream.get("index")
-        cmds.append(["mkvpropedit", path, "--edit", f"track:a{idx}", "--set", "flag-default=1"]) 
-        # clear other audio defaults
-        for a in audio_streams:
-            if a.get("index") != idx:
-                cmds.append(["mkvpropedit", path, "--edit", f"track:a{a.get('index')}", "--set", "flag-default=0"]) 
-        for c in cmds:
-            try:
-                subprocess.run(c, check=True)
-            except Exception as e:
-                print(f"Failed running: {' '.join(c)} -> {e}")
-                return False
-        print(f"Set {default_audio_language} audio as default for {path}")
-        return True
+        # Use ffmpeg to rewrite the file with the preferred audio as default
+        # This is more reliable than mkvpropedit for setting default dispositions
+        print(f"DEBUG: Setting default audio using ffmpeg (more reliable than mkvpropedit)")
+        print(f"  Preferred audio: {preferred_lang} (enumeration index {preferred_idx})")
+        
+        try:
+            tmp = str(Path(path).with_suffix(Path(path).suffix + ".tmp"))
+            # Use ffmpeg to copy file with disposition changes
+            cmd = ["ffmpeg", "-y", "-i", path, "-c", "copy", "-map", "0"]
+            
+            # Set disposition for audio streams
+            # -disposition:a:N can be used where N is the audio stream index (0-based among audio streams only)
+            for idx in range(len(audio_streams)):
+                if idx == preferred_idx:
+                    cmd += ["-disposition:a:{}".format(idx), "default"]
+                else:
+                    cmd += ["-disposition:a:{}".format(idx), "0"]
+            
+            cmd += ["-f", "matroska", tmp]
+            
+            print(f"DEBUG: ffmpeg command: {cmd}")
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            print(f"DEBUG: ffmpeg succeeded")
+            shutil.move(tmp, path)
+            
+            # VALIDATION: Re-scan the file to verify the change actually persisted
+            print(f"DEBUG: Validating change by re-scanning file...")
+            from scanVideoMetadata import analyze_file
+            rescanned = analyze_file(Path(path))
+            rescanned_audio = rescanned.get("audio_streams") or []
+            
+            print(f"DEBUG: Rescanned {len(rescanned_audio)} audio streams from file")
+            
+            # Find the audio stream we just set as default
+            default_found = False
+            for idx, a in enumerate(rescanned_audio):
+                lang = a.get("language", "unknown")
+                is_default = a.get("default", False)
+                print(f"DEBUG:   Stream {idx}: index={a.get('index')}, lang={lang}, default={is_default}")
+                
+                if language_matches_whitelist(a.get("language"), default_audio_language):
+                    if a.get("default"):
+                        default_found = True
+                        print(f"DEBUG: ✓ Validation SUCCESS - {default_audio_language} is now default")
+                    else:
+                        print(f"DEBUG: ✗ Validation FAILED - {default_audio_language} is NOT default after ffmpeg")
+            
+            if not default_found:
+                print(f"CRITICAL: ffmpeg succeeded but validation FAILED - changes did not persist!")
+                return {
+                    "success": False,
+                    "error": "ffmpeg validation failed - changes not persisted"
+                }
+            
+            print(f"Set {default_audio_language} audio as default for {path}")
+            return {
+                "success": True,
+                "previous": old_default or "none",
+                "new": preferred_lang
+            }
+        except subprocess.CalledProcessError as e:
+            print(f"CRITICAL: ffmpeg FAILED for {path}")
+            print(f"  Return code: {e.returncode}")
+            print(f"  Stderr: {e.stderr}")
+            return {"success": False, "error": f"ffmpeg failed: {e.stderr}"}
+        except Exception as e:
+            print(f"CRITICAL: Exception during audio fix: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "error": str(e)}
 
     # For other containers, use ffmpeg to rewrite dispositions (copy)
     if any(x in fmt for x in ("mp4", "mov")):
@@ -201,38 +280,57 @@ def attempt_set_default_audio(item: dict, default_audio_language: str = "English
             subprocess.run(cmd, check=True)
             shutil.move(tmp, path)
             print(f"Rewrote container to set default audio for {path}")
-            return True
+            return {
+                "success": True,
+                "previous": old_default or "none",
+                "new": preferred_lang
+            }
         except Exception as e:
             print(f"Failed to set default audio via ffmpeg: {e}")
-            return False
+            return {"success": False}
 
     print(f"Unsupported container for setting default audio: {fmt} for {path}")
-    return False
+    return {"success": False}
 
 
-def attempt_remove_non_whitelisted_subs(item: dict, subtitle_whitelist: str = "English"):
+def attempt_remove_non_whitelisted_subs(item: dict, subtitle_whitelist: str = "English", keep_backup: bool = True):
+    """Remove subtitles that don't match the subtitle whitelist.
+    
+    Args:
+        item: Video metadata dictionary with subtitle_streams
+        subtitle_whitelist: Comma-separated list of languages to keep
+        keep_backup: Whether to create backup before modifying
+    
+    Returns:
+        Dict with keys: 'success' (bool), 'removed' (list of languages), 'remaining' (list of languages)
+        Returns {'success': False} if no changes were made
+    """
     path = item.get("path")
     fmt = item.get("format", "")
     subs = item.get("subtitle_streams") or []
     if not subs:
         print(f"No subtitles for {path}; skipping.")
-        return
+        return {"success": False}
 
     # if any subtitle has unknown language, skip
     for s in subs:
         lang = s.get("language")
         if not lang or str(lang).lower() in ("unknown", "none"):
             print(f"Subtitle with unknown language in {path}; skipping removal for this file.")
-            return
+            return {"success": False}
 
     # Create backup before making changes
-    backup_file_before_fix(path)
+    backup_file_before_fix(path, keep_backup=keep_backup)
 
     # identify non-whitelisted subtitle positions (0-based among subtitle streams)
     remove_positions = [i for i, s in enumerate(subs) if not language_matches_whitelist(s.get("language"), subtitle_whitelist)]
     if not remove_positions:
         print(f"No non-whitelisted subtitles to remove for {path}.")
-        return
+        return {"success": False}
+
+    # Get details of removed and remaining streams
+    removed_langs = [subs[i].get("language") for i in remove_positions]
+    remaining_langs = [subs[i].get("language") for i in range(len(subs)) if i not in remove_positions]
 
     # use ffmpeg to copy and drop these subtitle streams
     try:
@@ -252,17 +350,24 @@ def attempt_remove_non_whitelisted_subs(item: dict, subtitle_whitelist: str = "E
         subprocess.run(cmd, check=True, capture_output=True)
         shutil.move(tmp, path)
         print(f"Removed non-whitelisted subtitles from {path}")
+        return {"success": True, "removed": removed_langs, "remaining": remaining_langs}
     except Exception as e:
         print(f"Failed to remove subtitles via ffmpeg: {e}")
+        return {"success": False}
 
 
-def attempt_remove_non_whitelisted_audio(item: dict, audio_whitelist: str = "English"):
+
+def attempt_remove_non_whitelisted_audio(item: dict, audio_whitelist: str = "English", keep_backup: bool = True):
     """Remove audio streams not in the whitelist.
     
     Safety rules:
     1. Skip if no audio streams exist
     2. Skip if applying whitelist would remove ALL audio streams (never leave files without audio)
     3. Only remove if at least 1 audio stream matches whitelist
+    
+    Returns:
+        Dict with keys: 'success' (bool), 'removed' (list of languages), 'remaining' (list of languages)
+        Returns {'success': False} if no changes were made or if skipped for safety
     """
     path = item.get("path")
     fmt = item.get("format", "")
@@ -271,14 +376,14 @@ def attempt_remove_non_whitelisted_audio(item: dict, audio_whitelist: str = "Eng
     # Rule 1: Check if audio streams exist
     if not audio_streams:
         print(f"No audio streams for {path}; skipping audio whitelist removal.")
-        return
+        return {"success": False}
 
     # Rule 2: Check if any audio has unknown language
     for a in audio_streams:
         lang = a.get("language")
         if not lang or str(lang).lower() in ("unknown", "none"):
             print(f"Audio stream with unknown language in {path}; skipping removal for safety.")
-            return
+            return {"success": False}
 
     # Determine which audio streams would remain (match whitelist)
     whitelisted_positions = [i for i, a in enumerate(audio_streams) if language_matches_whitelist(a.get("language"), audio_whitelist)]
@@ -286,19 +391,21 @@ def attempt_remove_non_whitelisted_audio(item: dict, audio_whitelist: str = "Eng
     # Rule 2: Safety check - never remove all audio streams
     if not whitelisted_positions:
         print(f"Applying audio whitelist would remove ALL audio streams from {path}; skipping to preserve audio.")
-        return
+        return {"success": False}
 
     # Rule 3: Determine which streams to remove
     remove_positions = [i for i in range(len(audio_streams)) if i not in whitelisted_positions]
     
     if not remove_positions:
         print(f"No non-whitelisted audio streams to remove for {path}.")
-        return
+        return {"success": False}
+
+    # Get details of removed and remaining streams
+    removed_langs = [audio_streams[i].get("language") for i in remove_positions]
+    remaining_langs = [audio_streams[i].get("language") for i in whitelisted_positions]
 
     # Create backup before making changes
-    backup_file_before_fix(path)
-
-    # Use ffmpeg to copy and drop these audio streams
+    backup_file_before_fix(path, keep_backup=keep_backup)
     try:
         tmp = str(Path(path).with_suffix(Path(path).suffix + ".tmp"))
         cmd = ["ffmpeg", "-y", "-i", path, "-map", "0"]
@@ -316,8 +423,10 @@ def attempt_remove_non_whitelisted_audio(item: dict, audio_whitelist: str = "Eng
         subprocess.run(cmd, check=True, capture_output=True)
         shutil.move(tmp, path)
         print(f"Removed non-whitelisted audio streams from {path}")
+        return {"success": True, "removed": removed_langs, "remaining": remaining_langs}
     except Exception as e:
         print(f"Failed to remove audio streams via ffmpeg: {e}")
+        return {"success": False}
 
 
 

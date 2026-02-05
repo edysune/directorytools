@@ -135,10 +135,24 @@ def analyze_file(path: Path):
     return result
 
 
-def walk_and_scan(start_path: Path):
+def walk_and_scan(start_path: Path, progress_callback=None):
+    """Scan video files in a directory or file.
+    
+    Args:
+        start_path: Path to scan (file or directory)
+        progress_callback: Optional callback function(current_count, file_path) called for each file scanned
+    
+    Returns:
+        List of scan results for video files
+    """
     results = []
+    current_count = 0
+    
     if start_path.is_file():
         if is_video_file(start_path) and not should_skip_file(start_path):
+            current_count += 1
+            if progress_callback:
+                progress_callback(current_count, start_path)
             results.append(analyze_file(start_path))
         elif is_video_file(start_path) and should_skip_file(start_path):
             print(f"Skipping backup file: {start_path}")
@@ -153,6 +167,9 @@ def walk_and_scan(start_path: Path):
                 if should_skip_file(p):
                     print(f"Skipping backup file: {p}")
                 else:
+                    current_count += 1
+                    if progress_callback:
+                        progress_callback(current_count, p)
                     results.append(analyze_file(p))
 
     return results

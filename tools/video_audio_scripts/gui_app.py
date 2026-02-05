@@ -23,93 +23,8 @@ from analyzeVideoMetadata import (
 )
 from fixVideoMetadata import (
     load_json, attempt_set_default_audio, attempt_identify_unknown, backup_file_before_fix,
-    attempt_remove_non_whitelisted_audio
+    attempt_remove_non_whitelisted_audio, attempt_remove_non_whitelisted_subs
 )
-
-
-def attempt_remove_non_english_subs_fixed(item: dict, subtitle_whitelist: str = "English", keep_backup=True):
-    """Remove subtitles that don't match the subtitle whitelist.
-    
-    Args:
-        item: Video metadata dictionary with subtitle_streams
-        subtitle_whitelist: Comma-separated list of languages to keep (e.g., "English, Japanese")
-        keep_backup: Whether to create backup before modifying
-    
-    Returns:
-        True if changes were made, False otherwise
-    """
-    import subprocess
-    import shutil
-    from pathlib import Path
-    
-    def language_matches_whitelist(lang: str, whitelist: str) -> bool:
-        """Check if a language matches any language in the whitelist."""
-        if not lang or not whitelist:
-            return False
-        
-        lang_lower = str(lang).lower().strip()
-        preferred_langs = [l.lower().strip() for l in str(whitelist).split(",")]
-        
-        for pref in preferred_langs:
-            if pref in ("unknown", "", "none"):
-                continue
-            # Check exact match
-            if lang_lower == pref:
-                return True
-            # Check if language contains the code (e.g., "eng" in "English" or vice versa)
-            if pref in lang_lower or lang_lower in pref:
-                return True
-            # Check language code prefix for 2-letter codes (e.g., "en" matches "English" at start)
-            if len(lang_lower) == 2 and pref.startswith(lang_lower):
-                return True
-            if len(pref) == 2 and lang_lower.startswith(pref):
-                return True
-        
-        return False
-    
-    path = item.get("path")
-    fmt = item.get("format", "")
-    subs = item.get("subtitle_streams") or []
-    if not subs:
-        print(f"No subtitles for {path}; skipping.")
-        return False
-
-    # if any subtitle has unknown language, skip
-    for s in subs:
-        lang = s.get("language")
-        if not lang or str(lang).lower() in ("unknown", "none"):
-            print(f"Subtitle with unknown language in {path}; skipping removal for this file.")
-            return False
-
-    # identify non-whitelisted subtitle positions (0-based among subtitle streams)
-    remove_positions = [i for i, s in enumerate(subs) if not language_matches_whitelist(s.get("language"), subtitle_whitelist)]
-    if not remove_positions:
-        return False  # No changes needed
-
-    # Create backup BEFORE modifying if requested
-    if keep_backup:
-        backup_file_before_fix(path)
-
-    # use ffmpeg to copy and drop these subtitle streams
-    try:
-        # Create temp file with proper extension (e.g., file.tmp.mkv instead of file.mkv.nosubs)
-        path_obj = Path(path)
-        tmp = str(path_obj.parent / (path_obj.stem + ".tmp" + path_obj.suffix))
-        
-        cmd = ["ffmpeg", "-y", "-i", path, "-map", "0"]
-        for pos in remove_positions:
-            cmd += ["-map", f"-0:s:{pos}"]
-        cmd += ["-c", "copy", tmp]
-        subprocess.run(cmd, check=True, capture_output=True)
-        shutil.move(tmp, path)
-        print(f"Removed non-whitelisted subtitles from {path}")
-        return True  # Changes made successfully
-    except Exception as e:
-        print(f"Failed to remove subtitles via ffmpeg: {e}")
-        # Clean up temp file if it exists
-        if Path(tmp).exists():
-            Path(tmp).unlink()
-        raise  # Re-raise to count as failure
 
 
 def attempt_convert_subtitle_formats(item: dict, keep_backup=True):
@@ -868,13 +783,9 @@ class VideoAudioGUI:
             return False
     
     def update_file_management_menu_visibility(self):
-        """Show or hide File Management menu based on keep_original_files setting."""
-        if self.keep_original_files.get():
-            # Show the menu
-            self.menubar.entryconfig("Additional Scripts", state=tk.NORMAL)
-        else:
-            # Hide the menu
-            self.menubar.entryconfig("Additional Scripts", state=tk.DISABLED)
+        """Additional Scripts menu is always enabled."""
+        # Menu is always enabled, no conditional logic needed
+        pass
     
     def load_config(self):
         """Load configuration from JSON file."""
@@ -1155,14 +1066,24 @@ class VideoAudioGUI:
     def _run_scan(self, dir_path):
         """Run the scan operation in a background thread."""
         try:
+            self.root.after(0, lambda: self._set_status("Scanning 0 files - please wait", 0))
             self.log_message("Discovering video files...")
-            results = walk_and_scan(dir_path)
+            
+            # Track scan progress with a progress callback
+            def scan_progress(current_count, file_path):
+                """Callback to update scan progress."""
+                # Update every 50 files to reduce UI updates
+                if current_count % 50 == 0 or current_count < 10:
+                    self.root.after(0, lambda c=current_count: self._set_status(f"Scanning {c} files - please wait", 0))
+            
+            results = walk_and_scan(dir_path, progress_callback=scan_progress)
             
             if not results:
                 self.root.after(0, lambda: self._scan_complete([], dir_path, "No video files found"))
                 return
             
             # Save results to JSON
+            self.root.after(0, lambda r=len(results): self._set_status(f"Saving {r} scanned files - please wait", 50))
             timestamp = datetime.now().isoformat().replace(":", "-")
             out_name = f"scan_{dir_path.name}_{timestamp}.json"
             out_path = self.output_dir / out_name
@@ -1180,6 +1101,7 @@ class VideoAudioGUI:
             self.last_scan_file = out_path
             
             # Update UI in main thread
+            self.root.after(0, lambda: self._set_status("Finalizing - please wait", 95))
             self.root.after(0, lambda: self._scan_complete(results, dir_path, str(out_path)))
             
         except Exception as e:
@@ -1197,7 +1119,7 @@ class VideoAudioGUI:
             subtitle_issues = sum(1 for r in results if not r.get("subtitle_streams"))
             self.log_message(f"Summary: {len(results)} videos, {audio_issues} without audio, {subtitle_issues} without subtitles")
         
-        self.status_var.set(f"Scan complete - {len(results)} video files found")
+        self._set_status(f"Scan complete - {len(results)} video files found", 100)
         self.set_buttons_enabled(True)
     
     def _scan_error(self, error_msg):
@@ -1614,7 +1536,16 @@ class VideoAudioGUI:
             
             # === SCAN PHASE ===
             self.log_message("Discovering video files...")
-            results = walk_and_scan(dir_path)
+            self.root.after(0, lambda: self._set_status("Scanning 0 files - please wait", 0))
+            
+            # Track scan progress with callback
+            def scan_progress(current_count, file_path):
+                """Callback to update scan progress."""
+                # Update every 50 files to reduce UI updates
+                if current_count % 50 == 0 or current_count < 10:
+                    self.root.after(0, lambda c=current_count: self._set_status(f"Scanning {c} files - please wait", 0))
+            
+            results = walk_and_scan(dir_path, progress_callback=scan_progress)
             
             if not results:
                 self.root.after(0, lambda: self._scan_and_analyze_complete([], None, None))
@@ -1642,10 +1573,17 @@ class VideoAudioGUI:
             if results:
                 audio_issues = sum(1 for r in results if not r.get("audio_streams"))
                 subtitle_issues = sum(1 for r in results if not r.get("subtitle_streams"))
-                self.root.after(0, lambda: self.log_message(f"Scan Summary: {len(results)} videos, {audio_issues} without audio, {subtitle_issues} without subtitles"))
+                summary_msg = f"Scan Summary: {len(results)} videos, {audio_issues} without audio, {subtitle_issues} without subtitles"
+                self.root.after(0, lambda: self.log_message(summary_msg))
+                
+                # If there are files without audio, list them
+                if audio_issues > 0:
+                    no_audio_files = [r.get("file_path") for r in results if not r.get("audio_streams")]
+                    for file_path in no_audio_files:
+                        self.root.after(0, lambda fp=file_path: self.log_message(f"  No audio: {fp}"))
             
             # === ANALYZE PHASE ===
-            self.root.after(0, lambda: self.log_message("Starting analysis..."))
+            self.root.after(0, lambda: self._set_status("Analyzing - please wait", 0))
             
             try:
                 # Load scan data
@@ -1654,8 +1592,10 @@ class VideoAudioGUI:
                 
                 self.root.after(0, lambda: self.log_message("Running focused analyses..."))
                 outputs = []
+                total_analyses = 4
                 
                 # 1. Analyze subtitle whitelist
+                self.root.after(0, lambda: self._set_status("Analyzing subtitles... (1/4)", 25))
                 subtitle_whitelist_issues = analyze_subtitle_whitelist(
                     scan_data,
                     subtitle_whitelist=self.subtitle_whitelist.get()
@@ -1671,6 +1611,7 @@ class VideoAudioGUI:
                     outputs.append(("Subtitle Whitelist Issues", len(subtitle_whitelist_issues), out))
                 
                 # 2. Analyze allowed subtitle types
+                self.root.after(0, lambda: self._set_status("Analyzing subtitle formats... (2/4)", 50))
                 allowed_types_issues = analyze_allowed_subtitle_types(
                     scan_data,
                     allowed_subtitle_types=self.allowed_subtitle_types.get()
@@ -1686,6 +1627,7 @@ class VideoAudioGUI:
                     outputs.append(("Incompatible Subtitle Formats", len(allowed_types_issues), out))
                 
                 # 3. Analyze default audio language
+                self.root.after(0, lambda: self._set_status("Analyzing default audio... (3/4)", 75))
                 default_audio_issues = analyze_default_audio(
                     scan_data,
                     default_audio_language=self.default_audio_language.get()
@@ -1701,6 +1643,7 @@ class VideoAudioGUI:
                     outputs.append(("Default Audio Issues", len(default_audio_issues), out))
                 
                 # 4. Analyze audio whitelist
+                self.root.after(0, lambda: self._set_status("Analyzing audio streams... (4/4)", 90))
                 audio_whitelist_issues = analyze_audio_whitelist(
                     scan_data,
                     audio_whitelist=self.audio_whitelist.get()
@@ -1762,16 +1705,16 @@ class VideoAudioGUI:
     def _scan_and_analyze_complete(self, scan_results, analysis_outputs, scan_file):
         """Handle scan and analyze completion."""
         if analysis_outputs:
-            self.log_message(f"\n✓ Scan and Analysis Complete!")
+            self.log_message(f"✓ Scan and Analysis Complete!")
             self.log_message(f"  Total Files Found: {len(scan_results)}")
             self.log_message(f"  Issue Types Found: {len(analysis_outputs)}")
             for issue_type, count, out_path in analysis_outputs:
                 self.log_message(f"    - {issue_type}: {count} files")
         else:
-            self.log_message(f"\n✓ Scan Complete - No issues found!")
+            self.log_message(f"✓ Scan Complete - No issues found!")
             self.log_message(f"  Total Files Found: {len(scan_results)}")
         
-        self._set_status(f"Ready - {len(scan_results)} files analyzed", 0)
+        self._set_status(f"Ready - {len(scan_results)} files analyzed", 100)
         self.set_buttons_enabled(True)
         self.update_cleanup_buttons()
     
@@ -1810,10 +1753,13 @@ class VideoAudioGUI:
     def _run_analyze(self, scan_file):
         """Run the analysis operation in a background thread."""
         try:
+            self.root.after(0, lambda: self._set_status("Analyzing - please wait", 0))
             self.root.after(0, lambda: self.log_message("Loading scan data..."))
             scan_data = load_scan(scan_file)
             
             self.root.after(0, lambda: self.log_message("Analyzing for issues..."))
+            self.root.after(0, lambda: self._set_status("Analyzing... (1/5)", 20))
+            
             # Run analysis with configuration-based rules
             default_audio_issues, subtitle_issues, unknown_issues, timing_issues = analyze(
                 scan_data, 
@@ -1825,12 +1771,14 @@ class VideoAudioGUI:
             )
             
             # Additional analysis: Check for incompatible subtitle formats
+            self.root.after(0, lambda: self._set_status("Analyzing... (2/5)", 40))
             incompatible_sub_issues = self._analyze_subtitle_formats(scan_data)
             
             # Save results - always create files even if empty, so Fix button can detect no issues
             outputs = []
             
             # Always create output files, even with 0 results
+            self.root.after(0, lambda: self._set_status("Saving results... (3/5)", 60))
             payload = {
                 "source": str(scan_file),
                 "generated_utc": datetime.utcnow().isoformat() + "Z",
@@ -1841,6 +1789,7 @@ class VideoAudioGUI:
             if len(default_audio_issues) > 0:
                 outputs.append(("Default Audio Issues", len(default_audio_issues), out))
             
+            self.root.after(0, lambda: self._set_status("Saving results... (4/5)", 70))
             payload = {
                 "source": str(scan_file),
                 "generated_utc": datetime.utcnow().isoformat() + "Z",
@@ -1882,6 +1831,7 @@ class VideoAudioGUI:
                 outputs.append(("Subtitle Timing Issues", len(timing_issues), out))
             
             # Update UI in main thread
+            self.root.after(0, lambda: self._set_status("Finalizing results... (5/5)", 95))
             self.root.after(0, lambda: self._analyze_complete(outputs))
             
         except Exception as e:
@@ -1896,10 +1846,10 @@ class VideoAudioGUI:
                 self.log_message(f"  - {issue_type}: {count} files")
                 self.log_message(f"    Saved to: {Path(out_path).name}")
             
-            self._set_status(f"Analysis complete - {len(outputs)} issue types found", 0)
+            self._set_status(f"Analysis complete - {len(outputs)} issue types found", 100)
         else:
             self.log_message("Analysis complete! No issues found.")
-            self._set_status("Analysis complete - No issues found", 0)
+            self._set_status("Analysis complete - No issues found", 100)
         
         self.set_buttons_enabled(True)
     
@@ -2161,12 +2111,18 @@ class VideoAudioGUI:
                     pct = int((idx / len(results)) * 100) if results else 0
                     self.root.after(0, lambda i=idx, t=len(results), p=pct: self._set_status(f"Fixing issues... ({i}/{t})", p))
                     try:
-                        changed = attempt_remove_non_english_subs_fixed(item, subtitle_whitelist=self.subtitle_whitelist.get(), keep_backup=self.keep_original_files.get())
-                        if changed:
+                        result = attempt_remove_non_whitelisted_subs(item, subtitle_whitelist=self.subtitle_whitelist.get(), keep_backup=self.keep_original_files.get())
+                        if result.get("success"):
                             self.root.after(0, lambda p=path: self.log_message(f"  Fixed: {Path(p).name}"))
+                            removed = result.get("removed", [])
+                            remaining = result.get("remaining", [])
+                            if removed:
+                                self.root.after(0, lambda r=removed: self.log_message(f"     Removed  [{len(r)}]: {', '.join(r)}"))
+                            if remaining:
+                                self.root.after(0, lambda r=remaining: self.log_message(f"     Remaining [{len(r)}]: {', '.join(r)}"))
                             total_fixed += 1
                         else:
-                            self.root.after(0, lambda p=path: self.log_message(f"  Skipped (no changes needed): {Path(p).name}"))
+                            self.root.after(0, lambda p=path: self.log_message(f"  Skipped: {Path(p).name}"))
                     except Exception as e:
                         self.root.after(0, lambda p=path, err=e: self.log_message(f"  Failed: {Path(p).name} - {err}"))
                         total_failed += 1
@@ -2203,12 +2159,15 @@ class VideoAudioGUI:
                     pct = int((idx / len(results)) * 100) if results else 0
                     self.root.after(0, lambda i=idx, t=len(results), p=pct: self._set_status(f"Fixing issues... ({i}/{t})", p))
                     try:
-                        changed = attempt_set_default_audio(item, default_audio_language=self.default_audio_language.get())
-                        if changed:
+                        result = attempt_set_default_audio(item, default_audio_language=self.default_audio_language.get(), keep_backup=self.keep_original_files.get())
+                        if result.get("success"):
                             self.root.after(0, lambda p=path: self.log_message(f"  Fixed: {Path(p).name}"))
+                            previous = result.get("previous", "unknown")
+                            new = result.get("new", "unknown")
+                            self.root.after(0, lambda p=previous, n=new: self.log_message(f"     Changed default audio: {p} → {n}"))
                             total_fixed += 1
                         else:
-                            self.root.after(0, lambda p=path: self.log_message(f"  Skipped: {Path(p).name} (already fixed)"))
+                            self.root.after(0, lambda p=path: self.log_message(f"  Skipped: {Path(p).name}"))
                     except Exception as e:
                         self.root.after(0, lambda p=path, err=e: self.log_message(f"  Failed: {Path(p).name} - {err}"))
                         total_failed += 1
@@ -2224,9 +2183,18 @@ class VideoAudioGUI:
                     pct = int((idx / len(results)) * 100) if results else 0
                     self.root.after(0, lambda i=idx, t=len(results), p=pct: self._set_status(f"Fixing issues... ({i}/{t})", p))
                     try:
-                        attempt_remove_non_whitelisted_audio(item, audio_whitelist=self.audio_whitelist.get())
-                        self.root.after(0, lambda p=path: self.log_message(f"  Fixed: {Path(p).name}"))
-                        total_fixed += 1
+                        result = attempt_remove_non_whitelisted_audio(item, audio_whitelist=self.audio_whitelist.get(), keep_backup=self.keep_original_files.get())
+                        if result.get("success"):
+                            self.root.after(0, lambda p=path: self.log_message(f"  Fixed: {Path(p).name}"))
+                            removed = result.get("removed", [])
+                            remaining = result.get("remaining", [])
+                            if removed:
+                                self.root.after(0, lambda r=removed: self.log_message(f"     Removed  [{len(r)}]: {', '.join(r)}"))
+                            if remaining:
+                                self.root.after(0, lambda r=remaining: self.log_message(f"     Remaining [{len(r)}]: {', '.join(r)}"))
+                            total_fixed += 1
+                        else:
+                            self.root.after(0, lambda p=path: self.log_message(f"  Skipped: {Path(p).name}"))
                     except Exception as e:
                         self.root.after(0, lambda p=path, err=e: self.log_message(f"  Failed: {Path(p).name} - {err}"))
                         total_failed += 1

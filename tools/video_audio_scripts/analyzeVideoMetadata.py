@@ -20,6 +20,7 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
+from fixVideoMetadata import language_matches_whitelist
 
 
 def find_latest_scan_file(output_dir: Path) -> Path:
@@ -138,23 +139,16 @@ def analyze(scan_json: dict, subtitle_whitelist=None, default_audio_language=Non
         # Check for audio streams not in whitelist (excluding unknown)
         audio_to_remove = []
         if len(audio_streams) > 1:  # Only if there are multiple streams
+            audio_whitelist_str = ", ".join(audio_langs)  # Convert to string for lang_matches
             for a in audio_streams:
                 lang = a.get("language")
-                lang_lower = str(lang).lower().strip() if lang else ""
                 
                 # Skip unknown language streams
-                if lang_lower in ("unknown", "", "none"):
+                if not lang or str(lang).lower().strip() in ("unknown", "", "none"):
                     continue
                 
-                # Check if this language is in the whitelist
-                is_whitelisted = False
-                for whitelist_lang in audio_langs:
-                    whitelist_lower = whitelist_lang.lower().strip()
-                    if lang_lower == whitelist_lower or whitelist_lower in lang_lower or lang_lower in whitelist_lower:
-                        is_whitelisted = True
-                        break
-                
-                if not is_whitelisted:
+                # Check if this language is in the whitelist using robust matching
+                if not language_matches_whitelist(lang, audio_whitelist_str):
                     audio_to_remove.append(a)
         
         # Only flag for removal if we won't remove all audio streams
@@ -167,24 +161,18 @@ def analyze(scan_json: dict, subtitle_whitelist=None, default_audio_language=Non
         # ===== SUBTITLE ANALYSIS =====
         # Check subtitles that are not in the whitelist
         non_whitelisted_subs = []
-        for s in subtitle_streams:
-            lang = s.get("language")
-            lang_lower = str(lang).lower().strip() if lang else ""
-            
-            # Skip unknown subtitle languages
-            if lang_lower in ("unknown", "", "none"):
-                continue
-            
-            # Check if this language is in the subtitle whitelist
-            is_whitelisted = False
-            for whitelist_lang in subtitle_langs:
-                whitelist_lower = whitelist_lang.lower().strip()
-                if lang_lower == whitelist_lower or whitelist_lower in lang_lower or lang_lower in whitelist_lower:
-                    is_whitelisted = True
-                    break
-            
-            if not is_whitelisted:
-                non_whitelisted_subs.append(s)
+        if subtitle_langs:
+            subtitle_whitelist_str = ", ".join(subtitle_langs)  # Convert to string for lang_matches
+            for s in subtitle_streams:
+                lang = s.get("language")
+                
+                # Skip unknown subtitle languages
+                if not lang or str(lang).lower().strip() in ("unknown", "", "none"):
+                    continue
+                
+                # Check if this language is in the subtitle whitelist using robust matching
+                if not language_matches_whitelist(lang, subtitle_whitelist_str):
+                    non_whitelisted_subs.append(s)
         
         if non_whitelisted_subs:
             e = dict(item)
@@ -259,43 +247,49 @@ def analyze(scan_json: dict, subtitle_whitelist=None, default_audio_language=Non
 def analyze_subtitle_whitelist(scan_json: dict, subtitle_whitelist=None):
     """Analyze subtitles against whitelist - focused analysis.
     
+    Only reports files that have subtitles needing removal AND have at least one
+    subtitle in the whitelist (ensures fix won't skip for safety).
+    
     Returns:
         List of items with subtitle_not_in_whitelist issues
     """
+    from fixVideoMetadata import language_matches_whitelist
+    
     results = scan_json.get("results") or []
     
     def parse_language_list(value):
         if isinstance(value, str):
-            return [lang.strip() for lang in value.split(",") if lang.strip()]
+            return value  # Keep as string for language_matches_whitelist
         elif isinstance(value, list):
-            return value
-        return []
+            return ", ".join(value)
+        return "English"
     
-    subtitle_langs = parse_language_list(subtitle_whitelist) or ["English"]
+    subtitle_whitelist_str = parse_language_list(subtitle_whitelist) or "English"
     issues = []
     
     for item in results:
         subtitle_streams = item.get("subtitle_streams") or []
+        
+        # Skip files with no subtitles
+        if not subtitle_streams:
+            continue
+        
+        # Identify non-whitelisted subs and whitelisted subs
         non_whitelisted_subs = []
+        has_whitelisted = False
         
         for s in subtitle_streams:
             lang = s.get("language")
-            lang_lower = str(lang).lower().strip() if lang else ""
             
-            if lang_lower in ("unknown", "", "none"):
-                continue
-            
-            is_whitelisted = False
-            for whitelist_lang in subtitle_langs:
-                whitelist_lower = whitelist_lang.lower().strip()
-                if lang_lower == whitelist_lower or whitelist_lower in lang_lower or lang_lower in whitelist_lower:
-                    is_whitelisted = True
-                    break
-            
-            if not is_whitelisted:
+            if language_matches_whitelist(lang, subtitle_whitelist_str):
+                has_whitelisted = True
+            else:
                 non_whitelisted_subs.append(s)
         
-        if non_whitelisted_subs:
+        # Only report as issue if:
+        # 1. There are non-whitelisted subtitles to remove
+        # 2. AND there are whitelisted subtitles to keep (ensures fix won't skip for safety)
+        if non_whitelisted_subs and has_whitelisted:
             e = dict(item)
             e["analyze_issue"] = "subtitle_not_in_whitelist"
             e["subtitles_to_remove"] = non_whitelisted_subs
@@ -364,7 +358,6 @@ def analyze_default_audio(scan_json: dict, default_audio_language=None):
     """
     results = scan_json.get("results") or []
     default_audio_lang = (default_audio_language.strip() if isinstance(default_audio_language, str) else "English") or "English"
-    default_audio_lang_lower = default_audio_lang.lower().strip()
     issues = []
     
     for item in results:
@@ -374,14 +367,12 @@ def analyze_default_audio(scan_json: dict, default_audio_language=None):
         
         for a in audio_streams:
             lang = a.get("language")
-            lang_lower = str(lang).lower().strip() if lang else ""
             
             if a.get("default"):
-                if lang_lower not in (default_audio_lang_lower, "unknown", "", "none"):
-                    if not (default_audio_lang_lower in lang_lower or lang_lower in default_audio_lang_lower):
-                        default_non_preferred = True
+                if not language_matches_whitelist(lang, default_audio_lang):
+                    default_non_preferred = True
             
-            if lang_lower in (default_audio_lang_lower, "unknown") or default_audio_lang_lower in lang_lower or lang_lower in default_audio_lang_lower:
+            if language_matches_whitelist(lang, default_audio_lang):
                 has_preferred_audio = True
         
         if default_non_preferred and has_preferred_audio:
