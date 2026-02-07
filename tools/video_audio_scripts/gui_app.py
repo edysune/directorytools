@@ -15,11 +15,11 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 # Import scan and analyze functionality
-from scanVideoMetadata import walk_and_scan, is_video_file
+from scanVideoMetadata import walk_and_scan, walk_and_scan_subtitles, is_video_file
 from analyzeVideoMetadata import (
     analyze, find_latest_scan_file, load_scan, write_output,
     analyze_subtitle_whitelist, analyze_allowed_subtitle_types,
-    analyze_default_audio, analyze_audio_whitelist
+    analyze_default_audio, analyze_audio_whitelist, analyze_non_embedded_subtitles
 )
 from fixVideoMetadata import (
     load_json, attempt_set_default_audio, attempt_identify_unknown, backup_file_before_fix,
@@ -364,6 +364,9 @@ class VideoAudioGUI:
         self.default_audio_language = tk.StringVar(value="English")
         self.audio_whitelist = tk.StringVar(value="English")
         
+        # Directory Management Settings
+        self.ignore_directories = tk.StringVar(value="")
+        
         # Create widgets first (needed for log_message)
         self.create_widgets()
         
@@ -517,12 +520,49 @@ class VideoAudioGUI:
         fix_btn.grid(row=0, column=2, padx=5, pady=5)
         self.fix_btn = fix_btn
         
-        # Log output section
-        log_frame = ttk.LabelFrame(main_frame, text="Output Log", padding="10")
-        log_frame.grid(row=3, column=0, columnspan=3, sticky=tk.W+tk.E+tk.N+tk.S, pady=(10, 10))
+        # Log output section with custom header
+        log_container = tk.Frame(main_frame, bg=self.colors['bg'])
+        log_container.grid(row=3, column=0, columnspan=3, sticky=tk.W+tk.E+tk.N+tk.S, pady=(10, 10))
+        log_container.columnconfigure(0, weight=1)
+        log_container.rowconfigure(1, weight=1)
+        main_frame.rowconfigure(3, weight=1)
+        
+        # Header frame with title and save button
+        log_header_frame = tk.Frame(log_container, bg=self.colors['bg'])
+        log_header_frame.grid(row=0, column=0, sticky=tk.W+tk.E, pady=(0, 5))
+        log_header_frame.columnconfigure(0, weight=1)
+        
+        # Output Log title
+        log_title = tk.Label(
+            log_header_frame,
+            text="Output Log",
+            bg=self.colors['bg'],
+            fg=self.colors['fg'],
+            font=("Arial", 10, "bold")
+        )
+        log_title.grid(row=0, column=0, sticky=tk.W)
+        
+        # Save Log button (floated to right)
+        save_log_btn = tk.Button(
+            log_header_frame,
+            text="💾 Save Log",
+            command=self.save_log_to_file,
+            bg=self.colors['button_bg'],
+            fg=self.colors['button_fg'],
+            borderwidth=1,
+            relief=tk.FLAT,
+            cursor="hand2",
+            font=("Arial", 9),
+            padx=10,
+            pady=2
+        )
+        save_log_btn.grid(row=0, column=1, sticky=tk.E, padx=5)
+        
+        # Log frame for text widget
+        log_frame = tk.Frame(log_container, bg=self.colors['entry_bg'])
+        log_frame.grid(row=1, column=0, sticky=tk.W+tk.E+tk.N+tk.S)
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
-        main_frame.rowconfigure(3, weight=1)
 
         
         # Text widget with scrollbar (dark mode styling)
@@ -782,6 +822,17 @@ class VideoAudioGUI:
         except Exception:
             return False
     
+    def _file_has_results_non_embedded(self, file_path):
+        """Check if a non-embedded subtitles analysis file contains actual results."""
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                linked = data.get("linked_results", [])
+                unlinked = data.get("unlinked_results", [])
+                return len(linked) > 0 or len(unlinked) > 0
+        except Exception:
+            return False
+    
     def update_file_management_menu_visibility(self):
         """Additional Scripts menu is always enabled."""
         # Menu is always enabled, no conditional logic needed
@@ -822,6 +873,11 @@ class VideoAudioGUI:
                     # Load backup settings
                     self.delete_previous_output_auto.set(config.get("delete_previous_output_auto", False))
                     
+                    # Load directory management settings (raw text)
+                    ignore_dirs = config.get("ignore_directories", "")
+                    if ignore_dirs:
+                        self.ignore_directories.set(ignore_dirs)
+                    
                     return config
             except Exception as e:
                 self.log_message(f"Error loading config: {e}")
@@ -840,6 +896,7 @@ class VideoAudioGUI:
                 "default_audio_language": self.default_audio_language.get(),
                 "audio_whitelist": self.audio_whitelist.get(),
                 "attempt_identify_unknown_audio": self.attempt_identify_unknown_audio.get(),
+                "ignore_directories": self.ignore_directories.get(),
                 "last_updated": datetime.now().isoformat(),
             }
             
@@ -1003,6 +1060,33 @@ class VideoAudioGUI:
         self.log_text.see(tk.END)
         self.log_text.config(state=tk.DISABLED)
     
+    def save_log_to_file(self):
+        """Save the current output log to a file."""
+        try:
+            # Get current log content
+            log_content = self.log_text.get("1.0", tk.END)
+            
+            # Check if log is empty
+            if not log_content.strip():
+                messagebox.showinfo("Empty Log", "The output log is empty. Nothing to save.")
+                return
+            
+            # Create filename with timestamp
+            timestamp = datetime.now().isoformat().replace(":", "-")
+            filename = f"output_log_{timestamp}.txt"
+            output_path = self.output_dir / filename
+            
+            # Save to file
+            with open(output_path, "w", encoding="utf-8") as f:
+                f.write(log_content)
+            
+            self.log_message(f"Log saved to: {output_path.name}")
+            
+        except Exception as e:
+            error_msg = f"Failed to save log: {e}"
+            messagebox.showerror("Save Error", error_msg)
+            self.log_message(f"ERROR: {error_msg}")
+    
     def open_directory(self):
         """Open the selected directory in the default file explorer."""
         directory = self.selected_directory.get()
@@ -1069,6 +1153,17 @@ class VideoAudioGUI:
             self.root.after(0, lambda: self._set_status("Scanning 0 files - please wait", 0))
             self.log_message("Discovering video files...")
             
+            # Parse ignore directories from config
+            ignore_dirs_text = self.ignore_directories.get()
+            ignore_dirs = set()
+            if ignore_dirs_text:
+                for line in ignore_dirs_text.split('\n'):
+                    line = line.strip()
+                    if line:  # Skip empty lines
+                        ignore_dirs.add(line)
+                if ignore_dirs:
+                    self.log_message(f"Ignoring {len(ignore_dirs)} director{'y' if len(ignore_dirs) == 1 else 'ies'}")
+            
             # Track scan progress with a progress callback
             def scan_progress(current_count, file_path):
                 """Callback to update scan progress."""
@@ -1076,7 +1171,7 @@ class VideoAudioGUI:
                 if current_count % 50 == 0 or current_count < 10:
                     self.root.after(0, lambda c=current_count: self._set_status(f"Scanning {c} files - please wait", 0))
             
-            results = walk_and_scan(dir_path, progress_callback=scan_progress)
+            results = walk_and_scan(dir_path, progress_callback=scan_progress, ignore_dirs=ignore_dirs, log_callback=self.log_message)
             
             if not results:
                 self.root.after(0, lambda: self._scan_complete([], dir_path, "No video files found"))
@@ -1139,7 +1234,7 @@ class VideoAudioGUI:
         """Open settings dialog window with multiple sections."""
         dialog = tk.Toplevel(self.root)
         dialog.title("Settings")
-        dialog.geometry("600x700")
+        dialog.geometry("600x850")
         dialog.resizable(False, False)
         
         # Center dialog on parent window
@@ -1346,6 +1441,108 @@ class VideoAudioGUI:
         )
         cb_delete_output.pack(anchor=tk.W, padx=10, pady=(0, 10))
         
+        # ===== DIRECTORY MANAGEMENT SECTION =====
+        dir_mgmt_label = tk.Label(
+            scrollable_frame,
+            text="Directory Management",
+            bg=self.colors['bg'],
+            fg=self.colors['fg'],
+            font=("Arial", 11, "bold")
+        )
+        dir_mgmt_label.pack(anchor=tk.W, padx=10, pady=(10, 5))
+        
+        dir_mgmt_frame = tk.Frame(scrollable_frame, bg=self.colors['frame_bg'], relief=tk.FLAT, borderwidth=1)
+        dir_mgmt_frame.pack(fill=tk.BOTH, expand=False, padx=10, pady=(0, 10))
+        
+        # Ignore Directory label with tooltip
+        ignore_dir_header_frame = tk.Frame(dir_mgmt_frame, bg=self.colors['frame_bg'])
+        ignore_dir_header_frame.pack(anchor=tk.W, padx=10, pady=(10, 5))
+        
+        ignore_dir_label = tk.Label(
+            ignore_dir_header_frame,
+            text="Ignore Directory:",
+            bg=self.colors['frame_bg'],
+            fg=self.colors['fg'],
+            font=("Arial", 9)
+        )
+        ignore_dir_label.pack(side=tk.LEFT)
+        
+        # Tooltip icon
+        tooltip_label = tk.Label(
+            ignore_dir_header_frame,
+            text=" ⓘ",
+            bg=self.colors['frame_bg'],
+            fg=self.colors['highlight'],
+            font=("Arial", 10, "bold"),
+            cursor="question_arrow"
+        )
+        tooltip_label.pack(side=tk.LEFT)
+        
+        # Create tooltip
+        def create_tooltip(widget, text):
+            """Create a tooltip for a widget."""
+            tooltip = None
+            
+            def on_enter(event):
+                nonlocal tooltip
+                x, y, _, _ = widget.bbox("insert")
+                x += widget.winfo_rootx() + 20
+                y += widget.winfo_rooty() + 20
+                
+                tooltip = tk.Toplevel(widget)
+                tooltip.wm_overrideredirect(True)
+                tooltip.wm_geometry(f"+{x}+{y}")
+                
+                label = tk.Label(
+                    tooltip,
+                    text=text,
+                    background="#ffffe0",
+                    foreground="#000000",
+                    relief=tk.SOLID,
+                    borderwidth=1,
+                    font=("Arial", 9),
+                    padx=5,
+                    pady=3
+                )
+                label.pack()
+            
+            def on_leave(event):
+                nonlocal tooltip
+                if tooltip:
+                    tooltip.destroy()
+                    tooltip = None
+            
+            widget.bind("<Enter>", on_enter)
+            widget.bind("<Leave>", on_leave)
+        
+        create_tooltip(tooltip_label, "Add absolute directory path to ignore - 1 path per line")
+        
+        # Multi-line text widget for ignore directories
+        ignore_dir_text_frame = tk.Frame(dir_mgmt_frame, bg=self.colors['frame_bg'])
+        ignore_dir_text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        
+        ignore_dir_text = tk.Text(
+            ignore_dir_text_frame,
+            height=5,
+            width=50,
+            bg=self.colors['entry_bg'],
+            fg=self.colors['entry_fg'],
+            insertbackground=self.colors['entry_fg'],
+            wrap=tk.NONE,
+            font=("Arial", 9)
+        )
+        ignore_dir_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Scrollbar for text widget
+        ignore_dir_scrollbar = tk.Scrollbar(ignore_dir_text_frame, command=ignore_dir_text.yview)
+        ignore_dir_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        ignore_dir_text.config(yscrollcommand=ignore_dir_scrollbar.set)
+        
+        # Load current value
+        current_ignore_dirs = self.ignore_directories.get()
+        if current_ignore_dirs:
+            ignore_dir_text.insert("1.0", current_ignore_dirs)
+        
         # ===== BUTTON FRAME =====
         button_frame = tk.Frame(dialog, bg=self.colors['bg'])
         button_frame.pack(pady=(0, 10))
@@ -1368,6 +1565,10 @@ class VideoAudioGUI:
             self.audio_whitelist.set(", ".join(audio_wl) if audio_wl else "English")
             
             self.attempt_identify_unknown_audio.set(attempt_identify_var.get())
+            
+            # Save ignore directories (raw text)
+            ignore_dirs_text = ignore_dir_text.get("1.0", tk.END).rstrip("\n")
+            self.ignore_directories.set(ignore_dirs_text)
             
             # Save to config file
             self.save_config()
@@ -1538,6 +1739,17 @@ class VideoAudioGUI:
             self.log_message("Discovering video files...")
             self.root.after(0, lambda: self._set_status("Scanning 0 files - please wait", 0))
             
+            # Parse ignore directories from config
+            ignore_dirs_text = self.ignore_directories.get()
+            ignore_dirs = set()
+            if ignore_dirs_text:
+                for line in ignore_dirs_text.split('\n'):
+                    line = line.strip()
+                    if line:  # Skip empty lines
+                        ignore_dirs.add(line)
+                if ignore_dirs:
+                    self.root.after(0, lambda c=len(ignore_dirs): self.log_message(f"Ignoring {c} director{'y' if c == 1 else 'ies'}"))
+            
             # Track scan progress with callback
             def scan_progress(current_count, file_path):
                 """Callback to update scan progress."""
@@ -1545,7 +1757,7 @@ class VideoAudioGUI:
                 if current_count % 50 == 0 or current_count < 10:
                     self.root.after(0, lambda c=current_count: self._set_status(f"Scanning {c} files - please wait", 0))
             
-            results = walk_and_scan(dir_path, progress_callback=scan_progress)
+            results = walk_and_scan(dir_path, progress_callback=scan_progress, ignore_dirs=ignore_dirs, log_callback=self.log_message)
             
             if not results:
                 self.root.after(0, lambda: self._scan_and_analyze_complete([], None, None))
@@ -1578,9 +1790,33 @@ class VideoAudioGUI:
                 
                 # If there are files without audio, list them
                 if audio_issues > 0:
-                    no_audio_files = [r.get("file_path") for r in results if not r.get("audio_streams")]
+                    no_audio_files = [r.get("path") for r in results if not r.get("audio_streams")]
                     for file_path in no_audio_files:
                         self.root.after(0, lambda fp=file_path: self.log_message(f"  No audio: {fp}"))
+            
+            # === SCAN NON-EMBEDDED SUBTITLES ===
+            self.root.after(0, lambda: self.log_message("Scanning for non-embedded subtitle files..."))
+            subtitle_results = walk_and_scan_subtitles(dir_path, progress_callback=None, ignore_dirs=ignore_dirs, log_callback=self.log_message)
+            
+            subtitle_scan_path = None
+            if subtitle_results:
+                self.root.after(0, lambda: self.log_message(f"Found {len(subtitle_results)} non-embedded subtitle files"))
+                
+                # Save subtitle scan results to separate JSON
+                subtitle_scan_out_name = f"scan_subtitles_{dir_path.name}_{timestamp}.json"
+                subtitle_scan_path = self.output_dir / subtitle_scan_out_name
+                
+                subtitle_payload = {
+                    "scanned_path": str(dir_path),
+                    "generated_utc": datetime.utcnow().isoformat() + "Z",
+                    "file_count": len(subtitle_results),
+                    "results": subtitle_results,
+                }
+                
+                with open(subtitle_scan_path, "w", encoding="utf-8") as fh:
+                    json.dump(subtitle_payload, fh, indent=2, ensure_ascii=False)
+            else:
+                self.root.after(0, lambda: self.log_message("No non-embedded subtitle files found"))
             
             # === ANALYZE PHASE ===
             self.root.after(0, lambda: self._set_status("Analyzing - please wait", 0))
@@ -1657,6 +1893,33 @@ class VideoAudioGUI:
                 out = write_output("analyze_audio_whitelist", scan_out_path, payload)
                 if len(audio_whitelist_issues) > 0:
                     outputs.append(("Audio Whitelist Issues", len(audio_whitelist_issues), out))
+                
+                # 5. Analyze non-embedded subtitle files (if found)
+                if subtitle_scan_path:
+                    self.root.after(0, lambda: self._set_status("Analyzing non-embedded subtitles...", 92))
+                    self.root.after(0, lambda: self.log_message("Analyzing non-embedded subtitle files..."))
+                    
+                    subtitle_scan_data = load_scan(subtitle_scan_path)
+                    linked_subtitles, unlinked_subtitles = analyze_non_embedded_subtitles(
+                        subtitle_scan_data, scan_data
+                    )
+                    
+                    if linked_subtitles or unlinked_subtitles:
+                        payload = {
+                            "source": str(subtitle_scan_path),
+                            "generated_utc": datetime.utcnow().isoformat() + "Z",
+                            "linked_count": len(linked_subtitles),
+                            "unlinked_count": len(unlinked_subtitles),
+                            "linked_results": linked_subtitles,
+                            "unlinked_results": unlinked_subtitles,
+                        }
+                        out = write_output("analyze_non_embedded_subtitles", subtitle_scan_path, payload)
+                        if len(linked_subtitles) > 0 or len(unlinked_subtitles) > 0:
+                            outputs.append((
+                                f"Non-Embedded Subtitles ({len(linked_subtitles)} linked, {len(unlinked_subtitles)} unlinked)",
+                                len(linked_subtitles) + len(unlinked_subtitles),
+                                out
+                            ))
                 
                 self.root.after(0, lambda: self.log_message("Analysis complete, processing results..."))
                 
@@ -1926,6 +2189,7 @@ class VideoAudioGUI:
         default_audio_file = self.find_latest_analyze("default_audio")
         audio_whitelist_file = self.find_latest_analyze("audio_whitelist")
         unknown_file = self.find_latest_analyze("unknown")
+        non_embedded_subtitles_file = self.find_latest_analyze("non_embedded_subtitles")
         
         # Check if any of these files have actual issues
         has_issues = False
@@ -1938,6 +2202,8 @@ class VideoAudioGUI:
         if audio_whitelist_file and self._file_has_results(audio_whitelist_file):
             has_issues = True
         if unknown_file and self._file_has_results(unknown_file):
+            has_issues = True
+        if non_embedded_subtitles_file and self._file_has_results_non_embedded(non_embedded_subtitles_file):
             has_issues = True
         
         if not has_issues:
@@ -1999,6 +2265,11 @@ class VideoAudioGUI:
             fix_options['unknown'] = {
                 'label': 'Identify unknown languages',
                 'file': unknown_file
+            }
+        if non_embedded_subtitles_file and self._file_has_results_non_embedded(non_embedded_subtitles_file):
+            fix_options['non_embedded_subtitles'] = {
+                'label': 'Process non-embedded subtitle files',
+                'file': non_embedded_subtitles_file
             }
         
         # Show custom dialog with checkboxes
@@ -2108,12 +2379,12 @@ class VideoAudioGUI:
                 
                 for idx, item in enumerate(results, 1):
                     path = item.get("path")
-                    pct = int((idx / len(results)) * 100) if results else 0
+                    pct = int(((idx - 1) / len(results)) * 100) if results else 0
                     self.root.after(0, lambda i=idx, t=len(results), p=pct: self._set_status(f"Fixing issues... ({i}/{t})", p))
                     try:
                         result = attempt_remove_non_whitelisted_subs(item, subtitle_whitelist=self.subtitle_whitelist.get(), keep_backup=self.keep_original_files.get())
                         if result.get("success"):
-                            self.root.after(0, lambda p=path: self.log_message(f"  Fixed: {Path(p).name}"))
+                            self.root.after(0, lambda p=path: self.log_message(f"  Fixed S: {Path(p).name}"))
                             removed = result.get("removed", [])
                             remaining = result.get("remaining", [])
                             if removed:
@@ -2135,12 +2406,12 @@ class VideoAudioGUI:
                 
                 for idx, item in enumerate(results, 1):
                     path = item.get("path")
-                    pct = int((idx / len(results)) * 100) if results else 0
+                    pct = int(((idx - 1) / len(results)) * 100) if results else 0
                     self.root.after(0, lambda i=idx, t=len(results), p=pct: self._set_status(f"Fixing issues... ({i}/{t})", p))
                     try:
                         changed = attempt_convert_subtitle_formats(item, keep_backup=self.keep_original_files.get())
                         if changed:
-                            self.root.after(0, lambda p=path: self.log_message(f"  Converted: {Path(p).name}"))
+                            self.root.after(0, lambda p=path: self.log_message(f"  Fixed S: {Path(p).name}"))
                             total_fixed += 1
                         else:
                             self.root.after(0, lambda p=path: self.log_message(f"  Skipped (cannot convert or no changes): {Path(p).name}"))
@@ -2156,12 +2427,12 @@ class VideoAudioGUI:
                 
                 for idx, item in enumerate(results, 1):
                     path = item.get("path")
-                    pct = int((idx / len(results)) * 100) if results else 0
+                    pct = int(((idx - 1) / len(results)) * 100) if results else 0
                     self.root.after(0, lambda i=idx, t=len(results), p=pct: self._set_status(f"Fixing issues... ({i}/{t})", p))
                     try:
                         result = attempt_set_default_audio(item, default_audio_language=self.default_audio_language.get(), keep_backup=self.keep_original_files.get())
                         if result.get("success"):
-                            self.root.after(0, lambda p=path: self.log_message(f"  Fixed: {Path(p).name}"))
+                            self.root.after(0, lambda p=path: self.log_message(f"  Fixed A: {Path(p).name}"))
                             previous = result.get("previous", "unknown")
                             new = result.get("new", "unknown")
                             self.root.after(0, lambda p=previous, n=new: self.log_message(f"     Changed default audio: {p} → {n}"))
@@ -2180,12 +2451,12 @@ class VideoAudioGUI:
                 
                 for idx, item in enumerate(results, 1):
                     path = item.get("path")
-                    pct = int((idx / len(results)) * 100) if results else 0
+                    pct = int(((idx - 1) / len(results)) * 100) if results else 0
                     self.root.after(0, lambda i=idx, t=len(results), p=pct: self._set_status(f"Fixing issues... ({i}/{t})", p))
                     try:
                         result = attempt_remove_non_whitelisted_audio(item, audio_whitelist=self.audio_whitelist.get(), keep_backup=self.keep_original_files.get())
                         if result.get("success"):
-                            self.root.after(0, lambda p=path: self.log_message(f"  Fixed: {Path(p).name}"))
+                            self.root.after(0, lambda p=path: self.log_message(f"  Fixed A: {Path(p).name}"))
                             removed = result.get("removed", [])
                             remaining = result.get("remaining", [])
                             if removed:
@@ -2207,7 +2478,7 @@ class VideoAudioGUI:
                 
                 for idx, item in enumerate(results, 1):
                     path = item.get("path")
-                    pct = int((idx / len(results)) * 100) if results else 0
+                    pct = int(((idx - 1) / len(results)) * 100) if results else 0
                     self.root.after(0, lambda i=idx, t=len(results), p=pct: self._set_status(f"Fixing issues... ({i}/{t})", p))
                     try:
                         self.root.after(0, lambda p=path: self.log_message(f"  Checking: {Path(p).name}"))
@@ -2216,6 +2487,113 @@ class VideoAudioGUI:
                     except Exception as e:
                         self.root.after(0, lambda p=path, err=e: self.log_message(f"  Failed: {Path(p).name} - {err}"))
                         total_failed += 1
+            
+            # Fix non-embedded subtitles (merge into video files)
+            if 'non_embedded_subtitles' in selected_fixes:
+                self.root.after(0, lambda: self.log_message("Processing non-embedded subtitle files..."))
+                data = load_json(selected_fixes['non_embedded_subtitles'])
+                linked_results = data.get("linked_results") or []
+                unlinked_results = data.get("unlinked_results") or []
+                
+                # Only process linked subtitles
+                for idx, item in enumerate(linked_results, 1):
+                    subtitle_path = item.get("path")
+                    subtitle_name = Path(subtitle_path).name
+                    linked_video = item.get("linked_video")
+                    
+                    pct = int(((idx - 1) / len(linked_results)) * 100) if linked_results else 0
+                    self.root.after(0, lambda i=idx, t=len(linked_results), p=pct: self._set_status(f"Processing subtitles... ({i}/{t})", p))
+                    
+                    if not linked_video:
+                        continue
+                    
+                    self.root.after(0, lambda s=subtitle_name, v=Path(linked_video).name: 
+                        self.log_message(f"  Found: {s} -> linked to {v}"))
+                    
+                    # Validate subtitle filename pattern: {file_name}.{language}.{extension}
+                    subtitle_path_obj = Path(subtitle_path)
+                    subtitle_stem = subtitle_path_obj.stem  # filename without extension
+                    subtitle_ext = subtitle_path_obj.suffix.lower()
+                    
+                    # Extract potential language from subtitle filename
+                    # Pattern: base_name.language.ext
+                    parts = subtitle_stem.split('.')
+                    if len(parts) < 2:
+                        self.root.after(0, lambda s=subtitle_name: 
+                            self.log_message(f"     Skipped: Invalid naming pattern (no language detected)"))
+                        continue
+                    
+                    potential_language = parts[-1]  # Last part before extension
+                    
+                    # Validate against language list (case-insensitive)
+                    language_map = {lang.lower(): lang for lang in self.language_list}
+                    if potential_language.lower() not in language_map:
+                        self.root.after(0, lambda s=subtitle_name, lang=potential_language: 
+                            self.log_message(f"     Skipped: Invalid language '{lang}' (not in whitelist)"))
+                        continue
+                    
+                    # Get properly capitalized language name
+                    language = language_map[potential_language.lower()]
+                    
+                    try:
+                        # Merge subtitle into video file
+                        video_path = Path(linked_video)
+                        
+                        # Create backup if enabled
+                        if self.keep_original_files.get():
+                            backup_file_before_fix(str(video_path))
+                            self.root.after(0, lambda: self.log_message(f"     Created backup"))
+                        
+                        # Create temporary output file
+                        temp_output = video_path.parent / (video_path.stem + ".tmp" + video_path.suffix)
+                        
+                        # Use ffmpeg to merge subtitle with language metadata
+                        cmd = [
+                            "ffmpeg", "-y",
+                            "-i", str(video_path),
+                            "-i", str(subtitle_path),
+                            "-c", "copy",
+                            "-c:s", "copy",
+                            "-metadata:s:s:0", f"language={language.lower()[:3]}",
+                            "-metadata:s:s:0", f"title={language}",
+                            str(temp_output)
+                        ]
+                        
+                        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+                        
+                        if result.returncode == 0:
+                            # Replace original with merged file
+                            shutil.move(str(temp_output), str(video_path))
+                            
+                            # Remove external subtitle file
+                            Path(subtitle_path).unlink()
+                            
+                            self.root.after(0, lambda lang=language: 
+                                self.log_message(f"     ✓ Merged and removed external subtitle (language: {lang})"))
+                            total_fixed += 1
+                        else:
+                            # Clean up temp file if it exists
+                            if temp_output.exists():
+                                temp_output.unlink()
+                            
+                            error = result.stderr[:200] if result.stderr else "Unknown error"
+                            self.root.after(0, lambda e=error: 
+                                self.log_message(f"     Failed: ffmpeg error - {e}"))
+                            total_failed += 1
+                            
+                    except subprocess.TimeoutExpired:
+                        self.root.after(0, lambda: 
+                            self.log_message(f"     Failed: ffmpeg timeout (>120s)"))
+                        total_failed += 1
+                    except Exception as e:
+                        self.root.after(0, lambda err=str(e): 
+                            self.log_message(f"     Failed: {err}"))
+                        total_failed += 1
+                
+                # Log unlinked subtitles
+                if unlinked_results:
+                    self.root.after(0, lambda c=len(unlinked_results): 
+                        self.log_message(f"  Skipped {c} unlinked subtitle file(s)"))
             
             # Update UI in main thread
             self.root.after(0, lambda: self._fix_complete(total_fixed, total_failed))
@@ -2234,12 +2612,6 @@ class VideoAudioGUI:
         self._set_status(f"Fixes complete - {total_fixed} successful, {total_failed} failed", 100)
         self.set_buttons_enabled(True)
         self.update_cleanup_buttons()
-        
-        messagebox.showinfo("Fix Complete",
-            f"Fix process complete!\n\n"
-            f"Successfully fixed: {total_fixed} files\n"
-            f"Failed: {total_failed} files\n\n"
-            f"Check the log for details.")
     
     def _fix_error(self, error_msg):
         """Handle fix error (called in main thread)."""

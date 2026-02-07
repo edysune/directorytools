@@ -1,5 +1,5 @@
 {
-  "last_directory": "/mnt/A14000/plex/movies",
+  "last_directory": "/mnt/A14002/plex/anime_a",
   "keep_original_files": false,
   "delete_previous_output_auto": true,
   "subtitle_whitelist": "English, Japanese",
@@ -7,5 +7,6 @@
   "default_audio_language": "English",
   "audio_whitelist": "English, Japanese, Korean",
   "attempt_identify_unknown_audio": false,
-  "last_updated": "2026-02-04T09:03:02.516972"
+  "ignore_directories": "/mnt/A14000/plex/movies/Apocalypto (2006)",
+  "last_updated": "2026-02-06T22:22:53.874092"
 }

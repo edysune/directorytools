@@ -428,6 +428,67 @@ def analyze_audio_whitelist(scan_json: dict, audio_whitelist=None):
     return issues
 
 
+def analyze_non_embedded_subtitles(subtitles_scan_json: dict, video_scan_json: dict):
+    """Analyze non-embedded subtitle files and link them to their related video files.
+    
+    Args:
+        subtitles_scan_json: Scan results for subtitle files
+        video_scan_json: Scan results for video files
+    
+    Returns:
+        List of subtitle files with their linked video files
+    """
+    subtitle_results = subtitles_scan_json.get("results") or []
+    video_results = video_scan_json.get("results") or []
+    
+    # Create a mapping of video file stems (without extension) to full paths
+    video_map = {}
+    for video in video_results:
+        video_path = Path(video.get("path"))
+        video_stem = video_path.stem
+        video_map[video_stem.lower()] = video
+    
+    # Link subtitle files to video files
+    linked_subtitles = []
+    unlinked_subtitles = []
+    
+    for subtitle in subtitle_results:
+        subtitle_path = Path(subtitle.get("path"))
+        subtitle_stem = subtitle_path.stem
+        
+        # Try to find matching video file
+        # Handle common subtitle naming patterns like:
+        # - movie.srt -> movie.mp4
+        # - movie.eng.srt -> movie.mp4
+        # - movie.en.srt -> movie.mp4
+        
+        # First try exact match
+        matched_video = None
+        if subtitle_stem.lower() in video_map:
+            matched_video = video_map[subtitle_stem.lower()]
+        else:
+            # Try removing common language suffixes
+            # Common patterns: .eng, .en, .english, .spa, .es, .spanish, etc.
+            parts = subtitle_stem.split('.')
+            if len(parts) > 1:
+                # Try matching without the last part (likely language code)
+                base_stem = '.'.join(parts[:-1])
+                if base_stem.lower() in video_map:
+                    matched_video = video_map[base_stem.lower()]
+        
+        if matched_video:
+            linked_entry = dict(subtitle)
+            linked_entry["linked_video"] = matched_video.get("path")
+            linked_entry["linked_video_filename"] = matched_video.get("filename")
+            linked_subtitles.append(linked_entry)
+        else:
+            unlinked_entry = dict(subtitle)
+            unlinked_entry["issue"] = "no_matching_video"
+            unlinked_subtitles.append(unlinked_entry)
+    
+    return linked_subtitles, unlinked_subtitles
+
+
 def main():
     p = argparse.ArgumentParser(description="Analyze previous scan JSON for audio/subtitle issues")
     p.add_argument("file", nargs="?", help="Path to scan JSON file (defaults to latest in ./tools/output)")

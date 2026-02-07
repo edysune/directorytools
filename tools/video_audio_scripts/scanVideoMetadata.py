@@ -28,9 +28,19 @@ VIDEO_EXTS = {
     ".mpeg",
 }
 
+SUBTITLE_EXTS = {
+    ".srt",
+    ".ass",
+    ".ssa",
+}
+
 
 def is_video_file(p: Path):
     return p.suffix.lower() in VIDEO_EXTS
+
+
+def is_subtitle_file(p: Path):
+    return p.suffix.lower() in SUBTITLE_EXTS
 
 
 def should_skip_file(p: Path):
@@ -135,18 +145,38 @@ def analyze_file(path: Path):
     return result
 
 
-def walk_and_scan(start_path: Path, progress_callback=None):
+def analyze_subtitle_file(path: Path):
+    """Analyze a standalone subtitle file (SRT, ASS, SSA).
+    
+    Args:
+        path: Path to subtitle file
+    
+    Returns:
+        Dictionary with subtitle file information
+    """
+    return {
+        "path": str(path),
+        "filename": path.name,
+        "format": path.suffix.lower().lstrip('.'),
+        "size": path.stat().st_size if path.exists() else None,
+    }
+
+
+def walk_and_scan(start_path: Path, progress_callback=None, ignore_dirs=None, log_callback=None):
     """Scan video files in a directory or file.
     
     Args:
         start_path: Path to scan (file or directory)
         progress_callback: Optional callback function(current_count, file_path) called for each file scanned
+        ignore_dirs: Optional set of absolute directory paths to ignore during scanning
+        log_callback: Optional callback function(message) for logging
     
     Returns:
         List of scan results for video files
     """
     results = []
     current_count = 0
+    ignore_dirs = ignore_dirs or set()
     
     if start_path.is_file():
         if is_video_file(start_path) and not should_skip_file(start_path):
@@ -161,6 +191,21 @@ def walk_and_scan(start_path: Path, progress_callback=None):
         return results
 
     for root, dirs, files in os.walk(start_path):
+        # Log and filter out ignored directories in-place to prevent os.walk from descending into them
+        ignored_in_current = []
+        for d in dirs[:]:
+            full_path = str(Path(root) / d)
+            if full_path in ignore_dirs:
+                ignored_in_current.append(d)
+        
+        if ignored_in_current:
+            for ignored_dir in ignored_in_current:
+                if log_callback:
+                    log_callback(f"Ignoring directory: {Path(root) / ignored_dir}")
+        
+        # Filter out ignored directories
+        dirs[:] = [d for d in dirs if str(Path(root) / d) not in ignore_dirs]
+        
         for fname in files:
             p = Path(root) / fname
             if is_video_file(p):
@@ -171,6 +216,59 @@ def walk_and_scan(start_path: Path, progress_callback=None):
                     if progress_callback:
                         progress_callback(current_count, p)
                     results.append(analyze_file(p))
+
+    return results
+
+
+def walk_and_scan_subtitles(start_path: Path, progress_callback=None, ignore_dirs=None, log_callback=None):
+    """Scan subtitle files in a directory or file.
+    
+    Args:
+        start_path: Path to scan (file or directory)
+        progress_callback: Optional callback function(current_count, file_path) called for each file scanned
+        ignore_dirs: Optional set of absolute directory paths to ignore during scanning
+        log_callback: Optional callback function(message) for logging
+    
+    Returns:
+        List of scan results for subtitle files
+    """
+    results = []
+    current_count = 0
+    ignore_dirs = ignore_dirs or set()
+    
+    if start_path.is_file():
+        if is_subtitle_file(start_path):
+            current_count += 1
+            if progress_callback:
+                progress_callback(current_count, start_path)
+            results.append(analyze_subtitle_file(start_path))
+        else:
+            print(f"Skipping non-subtitle file: {start_path}")
+        return results
+
+    for root, dirs, files in os.walk(start_path):
+        # Log and filter out ignored directories in-place to prevent os.walk from descending into them
+        ignored_in_current = []
+        for d in dirs[:]:
+            full_path = str(Path(root) / d)
+            if full_path in ignore_dirs:
+                ignored_in_current.append(d)
+        
+        if ignored_in_current:
+            for ignored_dir in ignored_in_current:
+                if log_callback:
+                    log_callback(f"Ignoring directory: {Path(root) / ignored_dir}")
+        
+        # Filter out ignored directories
+        dirs[:] = [d for d in dirs if str(Path(root) / d) not in ignore_dirs]
+        
+        for fname in files:
+            p = Path(root) / fname
+            if is_subtitle_file(p):
+                current_count += 1
+                if progress_callback:
+                    progress_callback(current_count, p)
+                results.append(analyze_subtitle_file(p))
 
     return results
 
