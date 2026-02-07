@@ -568,5 +568,137 @@ def main():
         print("No issues found; no output files generated.")
 
 
+def analyze_warnings(scan_json: dict, subtitle_whitelist=None, default_audio_language=None, audio_whitelist=None):
+    """Analyze scan results for warning conditions (informational, not fixable issues).
+    
+    Returns a tuple of (files_without_default_audio, files_without_preferred_audio, files_without_preferred_subtitles, files_without_any_preferred_language)
+    """
+    results = scan_json.get("results") or []
+    
+    # Parse configuration
+    default_audio_lang = (default_audio_language.strip() if isinstance(default_audio_language, str) else "English") or "English"
+    
+    def parse_language_list(value):
+        if isinstance(value, str):
+            return value
+        elif isinstance(value, list):
+            return ", ".join(value)
+        return "English"
+    
+    subtitle_whitelist_str = parse_language_list(subtitle_whitelist) or "English"
+    audio_whitelist_str = parse_language_list(audio_whitelist) or "English"
+    
+    files_without_default_audio = []
+    files_without_preferred_audio = []
+    files_without_preferred_subtitles = []
+    files_without_any_preferred_language = []
+    
+    for item in results:
+        audio_streams = item.get("audio_streams") or []
+        subtitle_streams = item.get("subtitle_streams") or []
+        
+        # Check 1: Files without a default audio track that matches default_audio_language
+        # Either no default audio track exists, OR the default doesn't match the preferred language
+        has_matching_default_audio = any(
+            a.get("default") and language_matches_whitelist(a.get("language"), default_audio_lang)
+            for a in audio_streams
+        )
+        if not has_matching_default_audio and audio_streams:  # Only count if there ARE audio streams
+            files_without_default_audio.append(item.get("path"))
+        
+        # Check 2: Files without any audio matching the whitelist
+        has_preferred_audio = any(
+            language_matches_whitelist(a.get("language"), audio_whitelist_str)
+            for a in audio_streams
+        )
+        if not has_preferred_audio and audio_streams:  # Only count if there ARE audio streams
+            files_without_preferred_audio.append(item.get("path"))
+        
+        # Check 3: Files without any subtitles matching the whitelist
+        has_preferred_subtitles = any(
+            language_matches_whitelist(s.get("language"), subtitle_whitelist_str)
+            for s in subtitle_streams
+        )
+        if not has_preferred_subtitles:  # Count all files without preferred subtitles
+            files_without_preferred_subtitles.append(item.get("path"))
+        
+        # Check 4: Files without BOTH preferred audio AND preferred subtitles
+        # These files can't be properly interpreted in any preferred language
+        if not has_preferred_audio and not has_preferred_subtitles:
+            files_without_any_preferred_language.append(item.get("path"))
+    
+    return (
+        len(files_without_default_audio),
+        len(files_without_preferred_audio),
+        len(files_without_preferred_subtitles),
+        len(files_without_any_preferred_language)
+    )
+
+
+def analyze_warnings_detailed(scan_json: dict, subtitle_whitelist=None, default_audio_language=None, audio_whitelist=None):
+    """Analyze scan results for warning conditions with detailed file lists.
+    
+    Returns a dict with warning categories and their file lists.
+    """
+    results = scan_json.get("results") or []
+    
+    # Parse configuration
+    default_audio_lang = (default_audio_language.strip() if isinstance(default_audio_language, str) else "English") or "English"
+    
+    def parse_language_list(value):
+        if isinstance(value, str):
+            return value
+        elif isinstance(value, list):
+            return ", ".join(value)
+        return "English"
+    
+    subtitle_whitelist_str = parse_language_list(subtitle_whitelist) or "English"
+    audio_whitelist_str = parse_language_list(audio_whitelist) or "English"
+    
+    files_without_default_audio = []
+    files_without_preferred_audio = []
+    files_without_preferred_subtitles = []
+    files_without_any_preferred_language = []
+    
+    for item in results:
+        audio_streams = item.get("audio_streams") or []
+        subtitle_streams = item.get("subtitle_streams") or []
+        
+        # Check 1: Files without a default audio track that matches default_audio_language
+        has_matching_default_audio = any(
+            a.get("default") and language_matches_whitelist(a.get("language"), default_audio_lang)
+            for a in audio_streams
+        )
+        if not has_matching_default_audio and audio_streams:
+            files_without_default_audio.append(item.get("path"))
+        
+        # Check 2: Files without any audio matching the whitelist
+        has_preferred_audio = any(
+            language_matches_whitelist(a.get("language"), audio_whitelist_str)
+            for a in audio_streams
+        )
+        if not has_preferred_audio and audio_streams:
+            files_without_preferred_audio.append(item.get("path"))
+        
+        # Check 3: Files without any subtitles matching the whitelist
+        has_preferred_subtitles = any(
+            language_matches_whitelist(s.get("language"), subtitle_whitelist_str)
+            for s in subtitle_streams
+        )
+        if not has_preferred_subtitles:
+            files_without_preferred_subtitles.append(item.get("path"))
+        
+        # Check 4: Files without BOTH preferred audio AND preferred subtitles
+        if not has_preferred_audio and not has_preferred_subtitles:
+            files_without_any_preferred_language.append(item.get("path"))
+    
+    return {
+        "files_without_default_audio": files_without_default_audio,
+        "files_without_preferred_audio": files_without_preferred_audio,
+        "files_without_preferred_subtitles": files_without_preferred_subtitles,
+        "files_without_any_preferred_language": files_without_any_preferred_language
+    }
+
+
 if __name__ == "__main__":
     main()

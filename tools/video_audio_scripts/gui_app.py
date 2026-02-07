@@ -367,6 +367,11 @@ class VideoAudioGUI:
         # Directory Management Settings
         self.ignore_directories = tk.StringVar(value="")
         
+        # Warning Print Settings
+        self.warnings_print_default_audio = tk.BooleanVar(value=True)
+        self.warnings_print_preferred_audio = tk.BooleanVar(value=True)
+        self.warnings_print_preferred_subtitles = tk.BooleanVar(value=True)
+        
         # Create widgets first (needed for log_message)
         self.create_widgets()
         
@@ -520,6 +525,15 @@ class VideoAudioGUI:
         fix_btn.grid(row=0, column=2, padx=5, pady=5)
         self.fix_btn = fix_btn
         
+        print_warnings_btn = ttk.Button(
+            action_frame,
+            text="Print Warnings",
+            command=self.print_warnings,
+            state=tk.DISABLED
+        )
+        print_warnings_btn.grid(row=0, column=3, padx=5, pady=5)
+        self.print_warnings_btn = print_warnings_btn
+        
         # Log output section with custom header
         log_container = tk.Frame(main_frame, bg=self.colors['bg'])
         log_container.grid(row=3, column=0, columnspan=3, sticky=tk.W+tk.E+tk.N+tk.S, pady=(10, 10))
@@ -542,6 +556,22 @@ class VideoAudioGUI:
         )
         log_title.grid(row=0, column=0, sticky=tk.W)
         
+        # Clear Log button
+        clear_log_btn = tk.Button(
+            log_header_frame,
+            text="🗑️ Clear Log",
+            command=self.clear_log,
+            bg=self.colors['button_bg'],
+            fg=self.colors['button_fg'],
+            borderwidth=1,
+            relief=tk.FLAT,
+            cursor="hand2",
+            font=("Arial", 9),
+            padx=10,
+            pady=2
+        )
+        clear_log_btn.grid(row=0, column=1, sticky=tk.E, padx=5)
+        
         # Save Log button (floated to right)
         save_log_btn = tk.Button(
             log_header_frame,
@@ -556,7 +586,7 @@ class VideoAudioGUI:
             padx=10,
             pady=2
         )
-        save_log_btn.grid(row=0, column=1, sticky=tk.E, padx=5)
+        save_log_btn.grid(row=0, column=2, sticky=tk.E, padx=5)
         
         # Log frame for text widget
         log_frame = tk.Frame(log_container, bg=self.colors['entry_bg'])
@@ -668,10 +698,12 @@ class VideoAudioGUI:
         if has_directory:
             self.analyze_btn.config(state=tk.NORMAL)
             self.fix_btn.config(state=tk.NORMAL)
+            self.print_warnings_btn.config(state=tk.NORMAL)
             self._set_status("Ready - Directory: " + self.selected_directory.get(), 0)
         else:
             self.analyze_btn.config(state=tk.DISABLED)
             self.fix_btn.config(state=tk.DISABLED)
+            self.print_warnings_btn.config(state=tk.DISABLED)
             self._set_status("Ready - No directory selected", 0)
     
     def _set_status(self, message: str, percentage: int = 0):
@@ -878,6 +910,11 @@ class VideoAudioGUI:
                     if ignore_dirs:
                         self.ignore_directories.set(ignore_dirs)
                     
+                    # Load warning print settings
+                    self.warnings_print_default_audio.set(config.get("warnings_print_default_audio", True))
+                    self.warnings_print_preferred_audio.set(config.get("warnings_print_preferred_audio", True))
+                    self.warnings_print_preferred_subtitles.set(config.get("warnings_print_preferred_subtitles", True))
+                    
                     return config
             except Exception as e:
                 self.log_message(f"Error loading config: {e}")
@@ -897,6 +934,9 @@ class VideoAudioGUI:
                 "audio_whitelist": self.audio_whitelist.get(),
                 "attempt_identify_unknown_audio": self.attempt_identify_unknown_audio.get(),
                 "ignore_directories": self.ignore_directories.get(),
+                "warnings_print_default_audio": self.warnings_print_default_audio.get(),
+                "warnings_print_preferred_audio": self.warnings_print_preferred_audio.get(),
+                "warnings_print_preferred_subtitles": self.warnings_print_preferred_subtitles.get(),
                 "last_updated": datetime.now().isoformat(),
             }
             
@@ -1039,8 +1079,9 @@ class VideoAudioGUI:
             # Log results
             self.log_message(f"Removed {deleted_count} output file(s)")
             
-            # Disable Fix Issues button since analysis files are gone
+            # Disable Fix Issues and Print Warnings buttons since analysis files are gone
             self.fix_btn.config(state=tk.DISABLED)
+            self.print_warnings_btn.config(state=tk.DISABLED)
             self._set_status("Output cleared - Analysis needed", 0)
             
             if errors:
@@ -1086,6 +1127,20 @@ class VideoAudioGUI:
             error_msg = f"Failed to save log: {e}"
             messagebox.showerror("Save Error", error_msg)
             self.log_message(f"ERROR: {error_msg}")
+    
+    def clear_log(self):
+        """Clear all text from the output log."""
+        # Confirm with user before clearing
+        response = messagebox.askyesno(
+            "Clear Log",
+            "Are you sure you want to clear the entire output log?\n\n"
+            "This action cannot be undone."
+        )
+        
+        if response:
+            self.log_text.config(state=tk.NORMAL)
+            self.log_text.delete("1.0", tk.END)
+            self.log_text.config(state=tk.DISABLED)
     
     def open_directory(self):
         """Open the selected directory in the default file explorer."""
@@ -1229,6 +1284,7 @@ class VideoAudioGUI:
         state = tk.NORMAL if enabled else tk.DISABLED
         self.analyze_btn.config(state=state)
         self.fix_btn.config(state=state)
+        self.print_warnings_btn.config(state=state)
     
     def open_settings_dialog(self):
         """Open settings dialog window with multiple sections."""
@@ -1542,6 +1598,55 @@ class VideoAudioGUI:
         current_ignore_dirs = self.ignore_directories.get()
         if current_ignore_dirs:
             ignore_dir_text.insert("1.0", current_ignore_dirs)
+        
+        # Warning Print Settings
+        warning_print_label = tk.Label(
+            dir_mgmt_frame,
+            text="Warnings: Print Detailed Paths",
+            bg=self.colors['frame_bg'],
+            fg=self.colors['fg'],
+            font=("Arial", 9, "bold")
+        )
+        warning_print_label.pack(anchor=tk.W, padx=10, pady=(10, 5))
+        
+        # Checkbox for default audio warnings
+        cb_warn_default_audio = tk.Checkbutton(
+            dir_mgmt_frame,
+            text="Print Default Audio Language",
+            variable=self.warnings_print_default_audio,
+            bg=self.colors['frame_bg'],
+            fg=self.colors['fg'],
+            selectcolor=self.colors['entry_bg'],
+            activebackground=self.colors['frame_bg'],
+            activeforeground=self.colors['fg']
+        )
+        cb_warn_default_audio.pack(anchor=tk.W, padx=10, pady=(0, 5))
+        
+        # Checkbox for preferred audio warnings
+        cb_warn_preferred_audio = tk.Checkbutton(
+            dir_mgmt_frame,
+            text="Print Preferred Audio Language",
+            variable=self.warnings_print_preferred_audio,
+            bg=self.colors['frame_bg'],
+            fg=self.colors['fg'],
+            selectcolor=self.colors['entry_bg'],
+            activebackground=self.colors['frame_bg'],
+            activeforeground=self.colors['fg']
+        )
+        cb_warn_preferred_audio.pack(anchor=tk.W, padx=10, pady=(0, 5))
+        
+        # Checkbox for preferred subtitles warnings
+        cb_warn_preferred_subs = tk.Checkbutton(
+            dir_mgmt_frame,
+            text="Print Preferred Subtitle Language",
+            variable=self.warnings_print_preferred_subtitles,
+            bg=self.colors['frame_bg'],
+            fg=self.colors['fg'],
+            selectcolor=self.colors['entry_bg'],
+            activebackground=self.colors['frame_bg'],
+            activeforeground=self.colors['fg']
+        )
+        cb_warn_preferred_subs.pack(anchor=tk.W, padx=10, pady=(0, 10))
         
         # ===== BUTTON FRAME =====
         button_frame = tk.Frame(dialog, bg=self.colors['bg'])
@@ -1950,7 +2055,17 @@ class VideoAudioGUI:
                     if len(unknown_issues) > 0:
                         outputs.append(("Unknown Language Issues", len(unknown_issues), out))
                 
-                self.root.after(0, lambda: self._scan_and_analyze_complete(results, outputs, str(scan_out_path)))
+                # Analyze warnings (non-fixable informational items)
+                from analyzeVideoMetadata import analyze_warnings
+                warnings = analyze_warnings(
+                    scan_data,
+                    subtitle_whitelist=self.subtitle_whitelist.get(),
+                    default_audio_language=self.default_audio_language.get(),
+                    audio_whitelist=self.audio_whitelist.get()
+                )
+                
+                self.root.after(0, lambda: self._scan_and_analyze_complete(results, outputs, str(scan_out_path), warnings))
+
                 
             except Exception as analyze_err:
                 import traceback
@@ -1959,13 +2074,13 @@ class VideoAudioGUI:
                     self.log_message(f"Analysis error: {err}"),
                     self.log_message(f"Traceback: {tb}")
                 ))
-                self.root.after(0, lambda: self._scan_and_analyze_complete(results, None, str(scan_out_path)))
+                self.root.after(0, lambda: self._scan_and_analyze_complete(results, None, str(scan_out_path), None))
                 
         except Exception as e:
             error_msg = f"Scan and analyze failed: {e}"
             self.root.after(0, lambda: self._scan_and_analyze_error(error_msg))
     
-    def _scan_and_analyze_complete(self, scan_results, analysis_outputs, scan_file):
+    def _scan_and_analyze_complete(self, scan_results, analysis_outputs, scan_file, warnings=None):
         """Handle scan and analyze completion."""
         if analysis_outputs:
             self.log_message(f"✓ Scan and Analysis Complete!")
@@ -1973,6 +2088,21 @@ class VideoAudioGUI:
             self.log_message(f"  Issue Types Found: {len(analysis_outputs)}")
             for issue_type, count, out_path in analysis_outputs:
                 self.log_message(f"    - {issue_type}: {count} files")
+            
+            # Display warnings if any
+            if warnings:
+                no_default_audio, no_preferred_audio, no_preferred_subtitles, no_preferred_language = warnings
+                total_warnings = no_default_audio + no_preferred_audio + no_preferred_subtitles + no_preferred_language
+                if total_warnings > 0:
+                    self.log_message(f"  Warnings Found: {total_warnings}")
+                    if no_default_audio > 0:
+                        self.log_message(f"    - Files without default audio: {no_default_audio}")
+                    if no_preferred_audio > 0:
+                        self.log_message(f"    - Files without preferred audio: {no_preferred_audio}")
+                    if no_preferred_subtitles > 0:
+                        self.log_message(f"    - Files without preferred subtitles: {no_preferred_subtitles}")
+                    if no_preferred_language > 0:
+                        self.log_message(f"    - Files without any preferred language: {no_preferred_language}")
         else:
             self.log_message(f"✓ Scan Complete - No issues found!")
             self.log_message(f"  Total Files Found: {len(scan_results)}")
@@ -2364,6 +2494,114 @@ class VideoAudioGUI:
         dialog.wait_window()
         
         return result
+    
+    def print_warnings(self):
+        """Print detailed warnings with file paths."""
+        # Find the latest scan file
+        scan_file = self.last_scan_file or find_latest_scan_file(self.output_dir)
+        
+        if not scan_file or not Path(scan_file).exists():
+            messagebox.showwarning(
+                "No Scan File",
+                "No scan results found. Please run Scan & Analyze first."
+            )
+            return
+        
+        # Disable buttons during processing
+        self.set_buttons_enabled(False)
+        self.log_message(f"Loading warnings from: {Path(scan_file).name}")
+        self.status_var.set("Analyzing warnings... Please wait")
+        
+        # Run in separate thread
+        analyze_thread = threading.Thread(
+            target=self._run_print_warnings,
+            args=(Path(scan_file),),
+            daemon=True
+        )
+        analyze_thread.start()
+    
+    def _run_print_warnings(self, scan_file):
+        """Run the warnings analysis in a background thread."""
+        try:
+            from analyzeVideoMetadata import analyze_warnings_detailed, load_scan
+            
+            # Load scan data
+            self.root.after(0, lambda: self.log_message("Loading scan data..."))
+            scan_data = load_scan(scan_file)
+            
+            # Get detailed warnings
+            self.root.after(0, lambda: self.log_message("Analyzing warnings..."))
+            warnings = analyze_warnings_detailed(
+                scan_data,
+                subtitle_whitelist=self.subtitle_whitelist.get(),
+                default_audio_language=self.default_audio_language.get(),
+                audio_whitelist=self.audio_whitelist.get()
+            )
+            
+            # Calculate totals
+            total_warnings = (
+                len(warnings["files_without_default_audio"]) +
+                len(warnings["files_without_preferred_audio"]) +
+                len(warnings["files_without_preferred_subtitles"]) +
+                len(warnings["files_without_any_preferred_language"])
+            )
+            
+            # Print results to log
+            self.root.after(0, lambda: self._print_warnings_complete(warnings, total_warnings))
+            
+        except Exception as e:
+            error_msg = f"Failed to analyze warnings: {e}"
+            self.root.after(0, lambda: self._print_warnings_error(error_msg))
+    
+    def _print_warnings_complete(self, warnings, total_warnings):
+        """Display warnings in the log."""
+        if total_warnings == 0:
+            self.log_message("✓ No warnings found!")
+            self.log_message("  All files have preferred language options configured.")
+        else:
+            self.log_message(f"  Warnings Found: {total_warnings}")
+            
+            # Print each category based on settings
+            if warnings["files_without_default_audio"]:
+                count = len(warnings["files_without_default_audio"])
+                self.log_message(f"    - Files without default audio: {count}")
+                # Only print file paths if setting is enabled
+                if self.warnings_print_default_audio.get():
+                    for file_path in warnings["files_without_default_audio"]:
+                        self.log_message(f"        {file_path}")
+            
+            if warnings["files_without_preferred_audio"]:
+                count = len(warnings["files_without_preferred_audio"])
+                self.log_message(f"    - Files without preferred audio: {count}")
+                # Only print file paths if setting is enabled
+                if self.warnings_print_preferred_audio.get():
+                    for file_path in warnings["files_without_preferred_audio"]:
+                        self.log_message(f"        {file_path}")
+            
+            if warnings["files_without_preferred_subtitles"]:
+                count = len(warnings["files_without_preferred_subtitles"])
+                self.log_message(f"    - Files without preferred subtitles: {count}")
+                # Only print file paths if setting is enabled
+                if self.warnings_print_preferred_subtitles.get():
+                    for file_path in warnings["files_without_preferred_subtitles"]:
+                        self.log_message(f"        {file_path}")
+            
+            # Always print file paths for "files without any preferred language"
+            if warnings["files_without_any_preferred_language"]:
+                count = len(warnings["files_without_any_preferred_language"])
+                self.log_message(f"    - Files without any preferred language: {count}")
+                for file_path in warnings["files_without_any_preferred_language"]:
+                    self.log_message(f"        {file_path}")
+        
+        self._set_status("Ready", 100)
+        self.set_buttons_enabled(True)
+    
+    def _print_warnings_error(self, error_msg):
+        """Handle print warnings error."""
+        self.log_message(f"ERROR: {error_msg}")
+        self._set_status("Print warnings failed", 0)
+        self.set_buttons_enabled(True)
+        self.show_dark_error("Print Warnings Error", error_msg)
     
     def _run_fixes(self, selected_fixes):
         """Run the fix operations in a background thread."""

@@ -2,11 +2,14 @@
   "last_directory": "/mnt/A14002/plex/anime_a",
   "keep_original_files": false,
   "delete_previous_output_auto": true,
-  "subtitle_whitelist": "English, Japanese",
+  "subtitle_whitelist": "English",
   "allowed_subtitle_types": "SRT, ASS, SSA",
   "default_audio_language": "English",
   "audio_whitelist": "English, Japanese, Korean",
   "attempt_identify_unknown_audio": false,
   "ignore_directories": "/mnt/A14000/plex/movies/Apocalypto (2006)",
-  "last_updated": "2026-02-06T22:22:53.874092"
+  "warnings_print_default_audio": false,
+  "warnings_print_preferred_audio": false,
+  "warnings_print_preferred_subtitles": false,
+  "last_updated": "2026-02-07T01:42:23.056221"
 }
