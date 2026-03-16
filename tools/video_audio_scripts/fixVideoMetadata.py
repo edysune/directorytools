@@ -200,7 +200,7 @@ def attempt_set_default_audio(item: dict, default_audio_language: str = "English
         try:
             tmp = str(Path(path).with_suffix(Path(path).suffix + ".tmp"))
             # Use ffmpeg to copy file with disposition changes
-            cmd = ["ffmpeg", "-y", "-i", path, "-c", "copy", "-map", "0"]
+            cmd = ["ffmpeg", "-y", "-i", path, "-map", "0", "-c", "copy"]
             
             # Set disposition for audio streams
             # -disposition:a:N can be used where N is the audio stream index (0-based among audio streams only)
@@ -210,7 +210,7 @@ def attempt_set_default_audio(item: dict, default_audio_language: str = "English
                 else:
                     cmd += ["-disposition:a:{}".format(idx), "0"]
             
-            cmd += ["-f", "matroska", tmp]
+            cmd += [tmp]
             
             print(f"DEBUG: ffmpeg command: {cmd}")
             result = subprocess.run(cmd, check=True, capture_output=True, text=True)
@@ -270,10 +270,8 @@ def attempt_set_default_audio(item: dict, default_audio_language: str = "English
         # build ffmpeg metadata args
         try:
             tmp = str(Path(path).with_suffix(Path(path).suffix + ".fixed"))
-            # build -disposition:s or -disposition:a entries; the stream ordering is not reliable
-            # so use a simple ffmpeg copy and set metadata for first audio found index 0
-            cmd = ["ffmpeg", "-y", "-i", path, "-c", "copy"]
-            # set language metadata for chosen audio stream if desired
+            # build ffmpeg command with proper stream mapping
+            cmd = ["ffmpeg", "-y", "-i", path, "-map", "0", "-c", "copy"]
             # set default disposition: set chosen audio to default
             cmd += ["-disposition:a:0", "default"]
             cmd += [tmp]
@@ -335,16 +333,10 @@ def attempt_remove_non_whitelisted_subs(item: dict, subtitle_whitelist: str = "E
     # use ffmpeg to copy and drop these subtitle streams
     try:
         tmp = str(Path(path).with_suffix(Path(path).suffix + ".tmp"))
-        cmd = ["ffmpeg", "-y", "-i", path, "-map", "0"]
+        cmd = ["ffmpeg", "-y", "-i", path, "-map", "0", "-c", "copy"]
+        # Exclude non-whitelisted subtitle streams
         for pos in remove_positions:
             cmd += ["-map", f"-0:s:{pos}"]
-        cmd += ["-c", "copy"]
-        
-        # Specify output format based on container type
-        if "matroska" in fmt:
-            cmd += ["-f", "matroska"]
-        elif any(x in fmt for x in ("mp4", "mov")):
-            cmd += ["-f", "mp4"]
         
         cmd += [tmp]
         subprocess.run(cmd, check=True, capture_output=True)
@@ -408,16 +400,10 @@ def attempt_remove_non_whitelisted_audio(item: dict, audio_whitelist: str = "Eng
     backup_file_before_fix(path, keep_backup=keep_backup)
     try:
         tmp = str(Path(path).with_suffix(Path(path).suffix + ".tmp"))
-        cmd = ["ffmpeg", "-y", "-i", path, "-map", "0"]
+        cmd = ["ffmpeg", "-y", "-i", path, "-map", "0", "-c", "copy"]
+        # Exclude non-whitelisted audio streams
         for pos in remove_positions:
             cmd += ["-map", f"-0:a:{pos}"]
-        cmd += ["-c", "copy"]
-        
-        # Specify output format based on container type
-        if "matroska" in fmt:
-            cmd += ["-f", "matroska"]
-        elif any(x in fmt for x in ("mp4", "mov")):
-            cmd += ["-f", "mp4"]
         
         cmd += [tmp]
         subprocess.run(cmd, check=True, capture_output=True)

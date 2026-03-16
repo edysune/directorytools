@@ -23,7 +23,8 @@ from analyzeVideoMetadata import (
 )
 from fixVideoMetadata import (
     load_json, attempt_set_default_audio, attempt_identify_unknown, backup_file_before_fix,
-    attempt_remove_non_whitelisted_audio, attempt_remove_non_whitelisted_subs
+    attempt_remove_non_whitelisted_audio, attempt_remove_non_whitelisted_subs,
+    language_matches_whitelist
 )
 
 
@@ -2763,15 +2764,40 @@ class VideoAudioGUI:
                     
                     potential_language = parts[-1]  # Last part before extension
                     
-                    # Validate against language list (case-insensitive)
-                    language_map = {lang.lower(): lang for lang in self.language_list}
-                    if potential_language.lower() not in language_map:
+                    # Clean up language code - handle cases like "English-eng"
+                    if '-' in potential_language:
+                        potential_language = potential_language.split('-')[-1]  # Take last part after dash
+                    
+                    # Validate against language list using robust language matching
+                    # This handles ISO codes (en, es, fr) and full names (English, Spanish, French)
+                    whitelist_str = ", ".join(self.language_list)
+                    if not language_matches_whitelist(potential_language, whitelist_str):
                         self.root.after(0, lambda s=subtitle_name, lang=potential_language: 
                             self.log_message(f"     Skipped: Invalid language '{lang}' (not in whitelist)"))
                         continue
                     
-                    # Get properly capitalized language name
-                    language = language_map[potential_language.lower()]
+                    # Normalize language to 3-letter ISO code
+                    language = potential_language.lower()
+                    if language in ['en', 'english']:
+                        language = 'eng'
+                    elif language in ['es', 'spanish']:
+                        language = 'spa'
+                    elif language in ['fr', 'french']:
+                        language = 'fre'
+                    elif language in ['de', 'german']:
+                        language = 'ger'
+                    elif language in ['it', 'italian']:
+                        language = 'ita'
+                    elif language in ['pt', 'portuguese']:
+                        language = 'por'
+                    elif language in ['ru', 'russian']:
+                        language = 'rus'
+                    elif language in ['ja', 'japanese']:
+                        language = 'jpn'
+                    elif language in ['zh', 'chinese']:
+                        language = 'chi'
+                    elif language in ['ko', 'korean']:
+                        language = 'kor'
                     
                     try:
                         # Merge subtitle into video file
@@ -2790,10 +2816,12 @@ class VideoAudioGUI:
                             "ffmpeg", "-y",
                             "-i", str(video_path),
                             "-i", str(subtitle_path),
-                            "-c", "copy",
-                            "-c:s", "copy",
-                            "-metadata:s:s:0", f"language={language.lower()[:3]}",
-                            "-metadata:s:s:0", f"title={language}",
+                            "-map", "0",  # Map all streams from video (video, audio, existing subs)
+                            "-map", "1",  # Map subtitle from second input
+                            "-c", "copy",  # Copy all existing streams
+                            "-c:s", "srt",  # Explicitly set subtitle format to SRT
+                            "-disposition:s:0", "0",  # Don't set as default - let user choose
+                            "-metadata:s:s:0", f"language={language}",  # Set proper 3-letter language code
                             str(temp_output)
                         ]
                         
@@ -2814,9 +2842,17 @@ class VideoAudioGUI:
                             if temp_output.exists():
                                 temp_output.unlink()
                             
-                            error = result.stderr[:200] if result.stderr else "Unknown error"
-                            self.root.after(0, lambda e=error: 
-                                self.log_message(f"     Failed: ffmpeg error - {e}"))
+                            # Provide detailed error information
+                            error_msg = result.stderr.strip() if result.stderr else "Unknown error"
+                            if not error_msg:
+                                error_msg = result.stdout.strip() if result.stdout else "No output captured"
+                            
+                            # Log the command that failed for debugging
+                            cmd_str = " ".join(cmd)
+                            self.root.after(0, lambda c=cmd_str, e=error_msg: 
+                                self.log_message(f"     Failed: ffmpeg error"))
+                            self.root.after(0, lambda e=error_msg[:300]: 
+                                self.log_message(f"     Error details: {e}"))
                             total_failed += 1
                             
                     except subprocess.TimeoutExpired:
