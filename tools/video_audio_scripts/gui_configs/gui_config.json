@@ -1,15 +1,15 @@
 {
-  "last_directory": "/mnt/A14002/plex/anime_a",
+  "last_directory": "/home/robit/Downloads/Merlin",
   "keep_original_files": false,
   "delete_previous_output_auto": true,
   "subtitle_whitelist": "English",
-  "allowed_subtitle_types": "SRT, ASS, SSA",
+  "allowed_subtitle_types": "SRT, ASS, SSA, SUB, SBV, JSON",
   "default_audio_language": "English",
   "audio_whitelist": "English, Japanese, Korean",
   "attempt_identify_unknown_audio": false,
-  "ignore_directories": "/mnt/A14000/plex/movies/Apocalypto (2006)",
+  "ignore_directories": "/mnt/A14000/plex/movies/Apocalypto (2006)\n/mnt/A14000/plex/upscale_demos\n/mnt/A14000/plex/learning_videos\n/mnt/A14000/plex/backup\n/mnt/A16000/plex/foreign_tv_shows\n/mnt/A16000/plex/foreign_movies",
   "warnings_print_default_audio": false,
   "warnings_print_preferred_audio": false,
   "warnings_print_preferred_subtitles": false,
-  "last_updated": "2026-02-07T01:42:23.056221"
+  "last_updated": "2026-02-16T01:11:56.034657"
 }
