@@ -8,6 +8,8 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import os
 import sys
+import base64
+import threading
 from pathlib import Path
 from encrypt import SecureEncryptor, generate_master_key, derive_master_key_from_password
 
@@ -21,6 +23,11 @@ class EncryptionGUI:
         self.master_key = None
         self.encryptor = None
         
+        # Bulk encryption variables
+        self.bulk_folder_path = None
+        self.bulk_file_vars = {}  # Dictionary to store checkbox variables
+        self.bulk_files = []  # List of files/folders in the selected directory
+        
         self.create_widgets()
     
     def create_widgets(self):
@@ -31,16 +38,36 @@ class EncryptionGUI:
         # Configure grid weights
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=1)
+        main_frame.columnconfigure(0, weight=1)
         
         # Title
         title_label = ttk.Label(main_frame, text="Secure AES-256 File Encryption", 
                                 font=('Arial', 16, 'bold'))
-        title_label.grid(row=0, column=0, columnspan=3, pady=(0, 20))
+        title_label.grid(row=0, column=0, pady=(0, 10))
+        
+        # Create notebook for tabs
+        self.notebook = ttk.Notebook(main_frame)
+        self.notebook.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        main_frame.rowconfigure(1, weight=1)
+        
+        # Create tabs
+        self.create_single_file_tab()
+        self.create_bulk_encrypt_tab()
+        self.create_bulk_decrypt_tab()
+        
+        # Status bar at bottom
+        self.status_var = tk.StringVar(value="Ready")
+        status_bar = ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN)
+        status_bar.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(5, 0))
+    
+    def create_single_file_tab(self):
+        """Create the single file encryption/decryption tab"""
+        single_frame = ttk.Frame(self.notebook)
+        self.notebook.add(single_frame, text="Single File")
         
         # Master Key Section
-        key_frame = ttk.LabelFrame(main_frame, text="Master Key Management", padding="10")
-        key_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
+        key_frame = ttk.LabelFrame(single_frame, text="Master Key Management", padding="10")
+        key_frame.grid(row=0, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
         key_frame.columnconfigure(1, weight=1)
         
         ttk.Label(key_frame, text="Master Key Status:").grid(row=0, column=0, sticky=tk.W)
@@ -55,8 +82,8 @@ class EncryptionGUI:
                   command=self.enter_key).grid(row=1, column=2, pady=5, padx=(10, 0))
         
         # File Selection Section
-        self.file_frame = ttk.LabelFrame(main_frame, text="File Selection", padding="10")
-        self.file_frame.grid(row=2, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
+        self.file_frame = ttk.LabelFrame(single_frame, text="File Selection", padding="10")
+        self.file_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
         self.file_frame.columnconfigure(1, weight=1)
         
         ttk.Label(self.file_frame, text="Input File/Folder:").grid(row=0, column=0, sticky=tk.W)
@@ -72,8 +99,8 @@ class EncryptionGUI:
                   command=self.browse_output).grid(row=1, column=2, padx=(10, 0), pady=(10, 0))
         
         # Action Section
-        action_frame = ttk.LabelFrame(main_frame, text="Action", padding="10")
-        action_frame.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
+        action_frame = ttk.LabelFrame(single_frame, text="Action", padding="10")
+        action_frame.grid(row=2, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
         
         self.action_var = tk.StringVar(value="encrypt")
         ttk.Radiobutton(action_frame, text="Encrypt", variable=self.action_var, 
@@ -92,22 +119,417 @@ class EncryptionGUI:
                   command=self.execute_action).grid(row=2, column=0, columnspan=2, pady=(10, 0))
         
         # Log Section
-        log_frame = ttk.LabelFrame(main_frame, text="Activity Log", padding="10")
-        log_frame.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        log_frame = ttk.LabelFrame(single_frame, text="Activity Log", padding="10")
+        log_frame.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
-        main_frame.rowconfigure(4, weight=1)
+        single_frame.rowconfigure(3, weight=1)
         
         self.log_text = scrolledtext.ScrolledText(log_frame, height=10, width=70)
         self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
-        ttk.Button(log_frame, text="Clear Log", 
-                  command=self.clear_log).grid(row=1, column=0, pady=(5, 0))
+        # Configure single frame grid weights
+        single_frame.columnconfigure(0, weight=1)
+    
+    def create_bulk_encrypt_tab(self):
+        """Create the bulk encryption tab"""
+        bulk_frame = ttk.Frame(self.notebook)
+        self.notebook.add(bulk_frame, text="Bulk Encrypt")
         
-        # Status bar
-        self.status_var = tk.StringVar(value="Ready")
-        status_bar = ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN)
-        status_bar.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(10, 0))
+        # Folder Selection Section
+        folder_frame = ttk.LabelFrame(bulk_frame, text="Folder Selection", padding="10")
+        folder_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        folder_frame.columnconfigure(1, weight=1)
+        
+        ttk.Label(folder_frame, text="Select Folder:").grid(row=0, column=0, sticky=tk.W)
+        self.bulk_folder_entry = ttk.Entry(folder_frame, width=50)
+        self.bulk_folder_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(10, 0))
+        ttk.Button(folder_frame, text="Browse", 
+                  command=self.browse_bulk_folder).grid(row=0, column=2, padx=(10, 0))
+        
+        # Files List Section
+        files_frame = ttk.LabelFrame(bulk_frame, text="Files and Folders", padding="10")
+        files_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        files_frame.columnconfigure(0, weight=1)
+        files_frame.rowconfigure(0, weight=1)
+        bulk_frame.rowconfigure(1, weight=1)
+        
+        # Create scrollable frame for file list
+        self.bulk_canvas = tk.Canvas(files_frame)
+        scrollbar = ttk.Scrollbar(files_frame, orient="vertical", command=self.bulk_canvas.yview)
+        self.bulk_scrollable_frame = ttk.Frame(self.bulk_canvas)
+        
+        self.bulk_scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.bulk_canvas.configure(scrollregion=self.bulk_canvas.bbox("all"))
+        )
+        
+        self.bulk_canvas.create_window((0, 0), window=self.bulk_scrollable_frame, anchor="nw")
+        self.bulk_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        self.bulk_canvas.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        
+        # Control Section
+        control_frame = ttk.LabelFrame(bulk_frame, text="Controls", padding="10")
+        control_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        self.bulk_encrypt_button = ttk.Button(control_frame, text="Encrypt Selected", 
+                                             command=self.bulk_encrypt_selected, state="disabled")
+        self.bulk_encrypt_button.grid(row=0, column=0, padx=(0, 10))
+        
+        ttk.Button(control_frame, text="Select All", 
+                  command=self.bulk_select_all).grid(row=0, column=1, padx=(0, 10))
+        ttk.Button(control_frame, text="Deselect All", 
+                  command=self.bulk_deselect_all).grid(row=0, column=2, padx=(0, 10))
+        
+        # Progress Section
+        progress_frame = ttk.LabelFrame(bulk_frame, text="Progress", padding="10")
+        progress_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        progress_frame.columnconfigure(0, weight=1)
+        
+        self.bulk_progress_var = tk.StringVar(value="No files selected")
+        progress_label = ttk.Label(progress_frame, textvariable=self.bulk_progress_var)
+        progress_label.grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
+        
+        self.bulk_progress_bar = ttk.Progressbar(progress_frame, length=400, mode='determinate')
+        self.bulk_progress_bar.grid(row=1, column=0, sticky=(tk.W, tk.E))
+        
+        # Configure bulk frame grid weights
+        bulk_frame.columnconfigure(0, weight=1)
+    
+    def create_bulk_decrypt_tab(self):
+        """Create the bulk decryption tab"""
+        decrypt_frame = ttk.Frame(self.notebook)
+        self.notebook.add(decrypt_frame, text="Bulk Decrypt")
+        
+        # Manifest Selection Section
+        manifest_frame = ttk.LabelFrame(decrypt_frame, text="Manifest Selection", padding="10")
+        manifest_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        manifest_frame.columnconfigure(1, weight=1)
+        
+        ttk.Label(manifest_frame, text="Select enc.manifest file:").grid(row=0, column=0, sticky=tk.W)
+        self.manifest_entry = ttk.Entry(manifest_frame, width=50)
+        self.manifest_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(10, 0))
+        ttk.Button(manifest_frame, text="Browse", 
+                  command=self.browse_manifest).grid(row=0, column=2, padx=(10, 0))
+        
+        # Output Section
+        output_frame = ttk.LabelFrame(decrypt_frame, text="Output Folder", padding="10")
+        output_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        output_frame.columnconfigure(1, weight=1)
+        
+        ttk.Label(output_frame, text="Output to:").grid(row=0, column=0, sticky=tk.W)
+        self.decrypt_output_entry = ttk.Entry(output_frame, width=50)
+        self.decrypt_output_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(10, 0))
+        ttk.Button(output_frame, text="Browse", 
+                  command=self.browse_decrypt_output).grid(row=0, column=2, padx=(10, 0))
+        
+        # Control Section
+        control_frame = ttk.LabelFrame(decrypt_frame, text="Controls", padding="10")
+        control_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        self.bulk_decrypt_button = ttk.Button(control_frame, text="Decrypt All", 
+                                             command=self.bulk_decrypt_all, state="disabled")
+        self.bulk_decrypt_button.grid(row=0, column=0, padx=(0, 10))
+        
+        # Progress Section
+        progress_frame = ttk.LabelFrame(decrypt_frame, text="Progress", padding="10")
+        progress_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        progress_frame.columnconfigure(0, weight=1)
+        
+        self.decrypt_progress_var = tk.StringVar(value="No manifest selected")
+        progress_label = ttk.Label(progress_frame, textvariable=self.decrypt_progress_var)
+        progress_label.grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
+        
+        self.decrypt_progress_bar = ttk.Progressbar(progress_frame, length=400, mode='determinate')
+        self.decrypt_progress_bar.grid(row=1, column=0, sticky=(tk.W, tk.E))
+        
+        # Log Section
+        log_frame = ttk.LabelFrame(decrypt_frame, text="Decryption Log", padding="10")
+        log_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(0, weight=1)
+        decrypt_frame.rowconfigure(4, weight=1)
+        
+        self.decrypt_log_text = scrolledtext.ScrolledText(log_frame, height=10, width=70)
+        self.decrypt_log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Configure decrypt frame grid weights
+        decrypt_frame.columnconfigure(0, weight=1)
+    
+    # Bulk encryption methods
+    def browse_bulk_folder(self):
+        """Browse for folder to encrypt"""
+        folder_path = filedialog.askdirectory(title="Select Folder to Encrypt")
+        if folder_path:
+            self.bulk_folder_entry.delete(0, tk.END)
+            self.bulk_folder_entry.insert(0, folder_path)
+            self.load_bulk_files(folder_path)
+    
+    def load_bulk_files(self, folder_path):
+        """Load files and folders from selected directory"""
+        self.bulk_folder_path = Path(folder_path)
+        self.bulk_files = []
+        self.bulk_file_vars = {}
+        
+        # Clear existing widgets
+        for widget in self.bulk_scrollable_frame.winfo_children():
+            widget.destroy()
+        
+        # Get all files and folders in the directory (non-recursive)
+        try:
+            items = []
+            for item in self.bulk_folder_path.iterdir():
+                items.append(item)
+            
+            # Sort alphanumerically
+            items.sort(key=lambda x: x.name.lower())
+            
+            # Create checkbox for each item
+            for i, item in enumerate(items):
+                var = tk.BooleanVar()
+                self.bulk_file_vars[item.name] = var
+                
+                # Create frame for checkbox and label
+                item_frame = ttk.Frame(self.bulk_scrollable_frame)
+                item_frame.grid(row=i, column=0, sticky=tk.W, padx=5, pady=2)
+                
+                # Checkbox
+                checkbox = ttk.Checkbutton(item_frame, variable=var, 
+                                         command=self.update_encrypt_button)
+                checkbox.grid(row=0, column=0, padx=(0, 5))
+                
+                # Icon and label
+                icon = "📁" if item.is_dir() else "📄"
+                label = ttk.Label(item_frame, text=f"{icon} {item.name}")
+                label.grid(row=0, column=1, sticky=tk.W)
+                
+                self.bulk_files.append(item)
+            
+            self.bulk_progress_var.set(f"Found {len(self.bulk_files)} items")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load folder: {e}")
+    
+    def update_encrypt_button(self):
+        """Update encrypt button state based on selections"""
+        selected_count = sum(1 for var in self.bulk_file_vars.values() if var.get())
+        if selected_count > 0:
+            self.bulk_encrypt_button.config(state="normal")
+            self.bulk_progress_var.set(f"{selected_count} of {len(self.bulk_files)} items selected")
+        else:
+            self.bulk_encrypt_button.config(state="disabled")
+            self.bulk_progress_var.set(f"No files selected ({len(self.bulk_files)} items available)")
+    
+    def bulk_select_all(self):
+        """Select all files and folders"""
+        for var in self.bulk_file_vars.values():
+            var.set(True)
+        self.update_encrypt_button()
+    
+    def bulk_deselect_all(self):
+        """Deselect all files and folders"""
+        for var in self.bulk_file_vars.values():
+            var.set(False)
+        self.update_encrypt_button()
+    
+    def bulk_encrypt_selected(self):
+        """Encrypt selected files and folders"""
+        if not self.encryptor:
+            messagebox.showerror("Error", "Please set a master key first")
+            return
+        
+        # Get selected items
+        selected_items = []
+        for item in self.bulk_files:
+            if self.bulk_file_vars[item.name].get():
+                selected_items.append(item)
+        
+        if not selected_items:
+            messagebox.showerror("Error", "No items selected")
+            return
+        
+        # Create output folder
+        output_folder = self.bulk_folder_path.parent / f"{self.bulk_folder_path.name}_enc"
+        output_folder.mkdir(exist_ok=True)
+        
+        # Start encryption in background thread
+        thread = threading.Thread(target=self._bulk_encrypt_worker, 
+                                args=(selected_items, output_folder))
+        thread.daemon = True
+        thread.start()
+    
+    def _bulk_encrypt_worker(self, items, output_folder):
+        """Worker thread for bulk encryption"""
+        try:
+            # Generate manifest master key
+            manifest_master_key = generate_master_key()
+            manifest_master_key_b64 = base64.b64encode(manifest_master_key.hex().encode()).decode()
+            
+            # Create manifest encryptor
+            manifest_encryptor = SecureEncryptor(manifest_master_key)
+            
+            # Initialize manifest file
+            manifest_path = output_folder / "enc.manifest"
+            with open(manifest_path, 'w') as f:
+                f.write(manifest_master_key_b64 + '\n')
+            
+            total_items = len(items)
+            for i, item in enumerate(items):
+                # Update progress
+                progress = (i / total_items) * 100
+                self.bulk_progress_bar['value'] = progress
+                self.bulk_progress_var.set(f"Encrypting {item.name} ({i+1}/{total_items})")
+                
+                try:
+                    # Generate individual master key for this item
+                    individual_key = generate_master_key()
+                    individual_key_b64 = base64.b64encode(individual_key.hex().encode()).decode()
+                    
+                    # Encrypt original filename with manifest master key
+                    original_name_b64 = base64.b64encode(item.name.encode()).decode()
+                    encrypted_name = manifest_encryptor._encrypt_string(original_name_b64)
+                    encrypted_name_b64 = base64.b64encode(encrypted_name.encode()).decode()
+                    
+                    # Encrypt individual key with manifest master key
+                    encrypted_individual_key = manifest_encryptor._encrypt_string(individual_key_b64)
+                    encrypted_individual_key_b64 = base64.b64encode(encrypted_individual_key.encode()).decode()
+                    
+                    # Encrypt the file/folder with individual key
+                    individual_encryptor = SecureEncryptor(individual_key)
+                    encrypted_filename = individual_encryptor.generate_guid_filename(item)
+                    output_path = output_folder / encrypted_filename
+                    
+                    if item.is_dir():
+                        # Encrypt folder (will be zipped first)
+                        individual_encryptor.encrypt_file(item, output_path, use_guid_filename=True)
+                    else:
+                        # Encrypt file
+                        individual_encryptor.encrypt_file(item, output_path, use_guid_filename=True)
+                    
+                    # Add to manifest
+                    manifest_line = f"{encrypted_individual_key_b64},{encrypted_name_b64},{encrypted_filename}\n"
+                    with open(manifest_path, 'a') as f:
+                        f.write(manifest_line)
+                    
+                except Exception as e:
+                    self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to encrypt {item.name}: {e}"))
+            
+            # Complete
+            self.bulk_progress_bar['value'] = 100
+            self.bulk_progress_var.set(f"Completed! Encrypted {total_items} items")
+            self.root.after(0, lambda: messagebox.showinfo("Success", f"Bulk encryption completed!\nOutput: {output_folder}"))
+            
+        except Exception as e:
+            self.root.after(0, lambda: messagebox.showerror("Error", f"Bulk encryption failed: {e}"))
+    
+    def browse_manifest(self):
+        """Browse for manifest file"""
+        manifest_path = filedialog.askopenfilename(
+            title="Select enc.manifest file",
+            filetypes=[("Manifest files", "enc.manifest"), ("All files", "*.*")]
+        )
+        if manifest_path:
+            self.manifest_entry.delete(0, tk.END)
+            self.manifest_entry.insert(0, manifest_path)
+            self.bulk_decrypt_button.config(state="normal")
+            self.decrypt_progress_var.set("Manifest loaded - ready to decrypt")
+    
+    def browse_decrypt_output(self):
+        """Browse for output folder"""
+        output_path = filedialog.askdirectory(title="Select Output Folder")
+        if output_path:
+            self.decrypt_output_entry.delete(0, tk.END)
+            self.decrypt_output_entry.insert(0, output_path)
+    
+    def bulk_decrypt_all(self):
+        """Decrypt all items from manifest"""
+        manifest_path = self.manifest_entry.get().strip()
+        output_path = self.decrypt_output_entry.get().strip()
+        
+        if not manifest_path or not output_path:
+            messagebox.showerror("Error", "Please select manifest file and output folder")
+            return
+        
+        # Start decryption in background thread
+        thread = threading.Thread(target=self._bulk_decrypt_worker, 
+                                args=(manifest_path, output_path))
+        thread.daemon = True
+        thread.start()
+    
+    def _bulk_decrypt_worker(self, manifest_path, output_path):
+        """Worker thread for bulk decryption"""
+        try:
+            manifest_path = Path(manifest_path)
+            output_path = Path(output_path)
+            output_path.mkdir(exist_ok=True)
+            
+            # Read manifest
+            with open(manifest_path, 'r') as f:
+                lines = f.readlines()
+            
+            if not lines:
+                raise ValueError("Manifest file is empty")
+            
+            # Get manifest master key
+            manifest_master_key_b64 = lines[0].strip()
+            manifest_master_key_hex = base64.b64decode(manifest_master_key_b64).decode()
+            manifest_master_key = bytes.fromhex(manifest_master_key_hex)
+            manifest_encryptor = SecureEncryptor(manifest_master_key)
+            
+            total_items = len(lines) - 1  # Exclude header line
+            
+            for i, line in enumerate(lines[1:], 1):
+                # Update progress
+                progress = (i / total_items) * 100
+                self.decrypt_progress_bar['value'] = progress
+                self.decrypt_progress_var.set(f"Decrypting item {i}/{total_items}")
+                
+                try:
+                    # Parse manifest line
+                    parts = line.strip().split(',')
+                    if len(parts) != 3:
+                        continue
+                    
+                    encrypted_individual_key_b64, encrypted_name_b64, encrypted_filename = parts
+                    
+                    # Decrypt individual key
+                    encrypted_individual_key = base64.b64decode(encrypted_individual_key_b64).decode()
+                    individual_key_b64 = manifest_encryptor._decrypt_string(encrypted_individual_key)
+                    individual_key_hex = base64.b64decode(individual_key_b64).decode()
+                    individual_key = bytes.fromhex(individual_key_hex)
+                    
+                    # Decrypt original name
+                    encrypted_name = base64.b64decode(encrypted_name_b64).decode()
+                    original_name_b64 = manifest_encryptor._decrypt_string(encrypted_name)
+                    original_name = base64.b64decode(original_name_b64).decode()
+                    
+                    # Decrypt the file/folder
+                    individual_encryptor = SecureEncryptor(individual_key)
+                    encrypted_file_path = manifest_path.parent / encrypted_filename
+                    decrypted_output_path = output_path / original_name
+                    
+                    individual_encryptor.decrypt_file(encrypted_file_path, decrypted_output_path)
+                    
+                    self.root.after(0, lambda name=original_name: self._log_decrypt(f"Decrypted: {name}"))
+                    
+                except Exception as e:
+                    self.root.after(0, lambda: self._log_decrypt(f"Error decrypting item {i}: {e}"))
+            
+            # Complete
+            self.decrypt_progress_bar['value'] = 100
+            self.decrypt_progress_var.set(f"Completed! Decrypted {total_items} items")
+            self.root.after(0, lambda: messagebox.showinfo("Success", f"Bulk decryption completed!\nOutput: {output_path}"))
+            
+        except Exception as e:
+            self.root.after(0, lambda: messagebox.showerror("Error", f"Bulk decryption failed: {e}"))
+    
+    def _log_decrypt(self, message):
+        """Add message to decrypt log"""
+        self.decrypt_log_text.insert(tk.END, f"{message}\n")
+        self.decrypt_log_text.see(tk.END)
+        self.root.update_idletasks()
     
     def log(self, message):
         """Add message to log"""

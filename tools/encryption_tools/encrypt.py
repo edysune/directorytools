@@ -14,6 +14,7 @@ import zipfile
 import tempfile
 import shutil
 import uuid
+import base64
 from pathlib import Path
 from typing import Tuple, Optional
 
@@ -70,6 +71,58 @@ class SecureEncryptor:
                 return new_path
             
             counter += 1
+    
+    def _encrypt_string(self, plaintext: str) -> str:
+        """Encrypt a string using AES-256-GCM"""
+        # Generate salt and nonce
+        salt = os.urandom(16)
+        nonce = os.urandom(12)
+        
+        # Derive key for string encryption
+        info = b"string-encryption"
+        key = self.derive_key(salt, info)
+        
+        # Encrypt
+        cipher = Cipher(
+            algorithms.AES(key),
+            modes.GCM(nonce),
+            backend=self.backend
+        )
+        encryptor = cipher.encryptor()
+        ciphertext = encryptor.update(plaintext.encode()) + encryptor.finalize()
+        
+        # Return base64 encoded: [salt][nonce][ciphertext][auth_tag]
+        encrypted_data = salt + nonce + ciphertext + encryptor.tag
+        return base64.b64encode(encrypted_data).decode()
+    
+    def _decrypt_string(self, encrypted_b64: str) -> str:
+        """Decrypt a string using AES-256-GCM"""
+        # Decode base64
+        encrypted_data = base64.b64decode(encrypted_b64)
+        
+        # Extract components
+        salt = encrypted_data[:16]
+        nonce = encrypted_data[16:28]
+        ciphertext = encrypted_data[28:-16]
+        auth_tag = encrypted_data[-16:]
+        
+        # Derive key
+        info = b"string-encryption"
+        key = self.derive_key(salt, info)
+        
+        # Decrypt
+        cipher = Cipher(
+            algorithms.AES(key),
+            modes.GCM(nonce, auth_tag),
+            backend=self.backend
+        )
+        decryptor = cipher.decryptor()
+        
+        try:
+            plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+            return plaintext.decode()
+        except InvalidTag:
+            raise ValueError("String decryption failed: Invalid authentication tag")
     
     def encrypt_file(self, input_path: Path, output_path: Path, use_guid_filename: bool = False) -> None:
         """Encrypt a file or folder using AES-256-GCM"""
