@@ -2677,7 +2677,8 @@ class VideoAudioGUI:
                             self.root.after(0, lambda p=previous, n=new: self.log_message(f"     Changed default audio: {p} → {n}"))
                             total_fixed += 1
                         else:
-                            self.root.after(0, lambda p=path: self.log_message(f"  Skipped: {Path(p).name}"))
+                            error = result.get("error", "unknown reason")
+                            self.root.after(0, lambda p=path, e=error: self.log_message(f"  Skipped: {Path(p).name} ({e})"))
                     except Exception as e:
                         self.root.after(0, lambda p=path, err=e: self.log_message(f"  Failed: {Path(p).name} - {err}"))
                         total_failed += 1

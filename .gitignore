@@ -1,5 +1,6 @@
 # ignore ALL json files in tools
 tools/*.json
+tools/video_audio_scripts/gui_configs/*
 results
 tools/__pycache__
 tools/output/

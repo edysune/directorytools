@@ -179,11 +179,11 @@ def attempt_set_default_audio(item: dict, default_audio_language: str = "English
 
     if not preferred_stream:
         print(f"No {default_audio_language} audio streams for {path}; skipping.")
-        return {"success": False}
+        return {"success": False, "error": f"No {default_audio_language} audio streams found"}
 
     if preferred_stream.get("default"):
         print(f"{default_audio_language} audio already default for {path}; skipping.")
-        return {"success": False}
+        return {"success": False, "error": f"{default_audio_language} audio already default"}
 
     # Create backup before making changes
     backup_file_before_fix(path, keep_backup=keep_backup)
@@ -194,14 +194,13 @@ def attempt_set_default_audio(item: dict, default_audio_language: str = "English
     if "matroska" in fmt:
         # Use ffmpeg to rewrite the file with the preferred audio as default
         # This is more reliable than mkvpropedit for setting default dispositions
-        print(f"DEBUG: Setting default audio using ffmpeg (more reliable than mkvpropedit)")
-        print(f"  Preferred audio: {preferred_lang} (enumeration index {preferred_idx})")
-        
         try:
-            tmp = str(Path(path).with_suffix(Path(path).suffix + ".tmp"))
+            # Insert .tmp before the extension so ffmpeg can detect the container format
+            # e.g., video.mkv -> video.tmp.mkv instead of video.mkv.tmp
+            tmp = str(Path(path).with_suffix(".tmp" + Path(path).suffix))
             # Use ffmpeg to copy file with disposition changes
             cmd = ["ffmpeg", "-y", "-i", path, "-map", "0", "-c", "copy"]
-            
+
             # Set disposition for audio streams
             # -disposition:a:N can be used where N is the audio stream index (0-based among audio streams only)
             for idx in range(len(audio_streams)):
@@ -209,43 +208,31 @@ def attempt_set_default_audio(item: dict, default_audio_language: str = "English
                     cmd += ["-disposition:a:{}".format(idx), "default"]
                 else:
                     cmd += ["-disposition:a:{}".format(idx), "0"]
-            
+
             cmd += [tmp]
-            
-            print(f"DEBUG: ffmpeg command: {cmd}")
+
             result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            print(f"DEBUG: ffmpeg succeeded")
             shutil.move(tmp, path)
-            
+
             # VALIDATION: Re-scan the file to verify the change actually persisted
-            print(f"DEBUG: Validating change by re-scanning file...")
             from scanVideoMetadata import analyze_file
             rescanned = analyze_file(Path(path))
             rescanned_audio = rescanned.get("audio_streams") or []
-            
-            print(f"DEBUG: Rescanned {len(rescanned_audio)} audio streams from file")
-            
+
             # Find the audio stream we just set as default
             default_found = False
             for idx, a in enumerate(rescanned_audio):
-                lang = a.get("language", "unknown")
-                is_default = a.get("default", False)
-                print(f"DEBUG:   Stream {idx}: index={a.get('index')}, lang={lang}, default={is_default}")
-                
                 if language_matches_whitelist(a.get("language"), default_audio_language):
                     if a.get("default"):
                         default_found = True
-                        print(f"DEBUG: ✓ Validation SUCCESS - {default_audio_language} is now default")
-                    else:
-                        print(f"DEBUG: ✗ Validation FAILED - {default_audio_language} is NOT default after ffmpeg")
-            
+
             if not default_found:
                 print(f"CRITICAL: ffmpeg succeeded but validation FAILED - changes did not persist!")
                 return {
                     "success": False,
                     "error": "ffmpeg validation failed - changes not persisted"
                 }
-            
+
             print(f"Set {default_audio_language} audio as default for {path}")
             return {
                 "success": True,
@@ -269,7 +256,8 @@ def attempt_set_default_audio(item: dict, default_audio_language: str = "English
         # we'll set disposition for the chosen audio by copying file and adjusting dispositions
         # build ffmpeg metadata args
         try:
-            tmp = str(Path(path).with_suffix(Path(path).suffix + ".fixed"))
+            # Insert .fixed before the extension so ffmpeg can detect the container format
+            tmp = str(Path(path).with_suffix(".fixed" + Path(path).suffix))
             # build ffmpeg command with proper stream mapping
             cmd = ["ffmpeg", "-y", "-i", path, "-map", "0", "-c", "copy"]
             # set default disposition: set chosen audio to default
@@ -332,7 +320,8 @@ def attempt_remove_non_whitelisted_subs(item: dict, subtitle_whitelist: str = "E
 
     # use ffmpeg to copy and drop these subtitle streams
     try:
-        tmp = str(Path(path).with_suffix(Path(path).suffix + ".tmp"))
+        # Insert .tmp before the extension so ffmpeg can detect the container format
+        tmp = str(Path(path).with_suffix(".tmp" + Path(path).suffix))
         cmd = ["ffmpeg", "-y", "-i", path, "-map", "0", "-c", "copy"]
         # Exclude non-whitelisted subtitle streams
         for pos in remove_positions:
@@ -399,7 +388,8 @@ def attempt_remove_non_whitelisted_audio(item: dict, audio_whitelist: str = "Eng
     # Create backup before making changes
     backup_file_before_fix(path, keep_backup=keep_backup)
     try:
-        tmp = str(Path(path).with_suffix(Path(path).suffix + ".tmp"))
+        # Insert .tmp before the extension so ffmpeg can detect the container format
+        tmp = str(Path(path).with_suffix(".tmp" + Path(path).suffix))
         cmd = ["ffmpeg", "-y", "-i", path, "-map", "0", "-c", "copy"]
         # Exclude non-whitelisted audio streams
         for pos in remove_positions:
@@ -443,7 +433,8 @@ def attempt_identify_unknown(item: dict):
                 else:
                     # fallback: ffmpeg copy with metadata set for first audio stream
                     try:
-                        tmp = str(Path(path).with_suffix(Path(path).suffix + ".langset"))
+                        # Insert .langset before the extension so ffmpeg can detect the container format
+                        tmp = str(Path(path).with_suffix(".langset" + Path(path).suffix))
                         cmd = ["ffmpeg", "-y", "-i", path, "-c", "copy", "-metadata:s:a:0", f"language={g}", tmp]
                         subprocess.run(cmd, check=True)
                         shutil.move(tmp, path)
