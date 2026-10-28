@@ -76,9 +76,15 @@ def plan_file(item: dict, sub_wl: str, audio_wl: str, default_lang: str) -> dict
     c = rv.classify(item, sub_wl, audio_wl, default_lang)
     aud, sub = matroska_index_maps(item)
 
+    sz = item.get("size")
+    if isinstance(sz, str):
+        try:
+            sz = int(sz)
+        except ValueError:
+            sz = 0
     pinfo = {
         "path": p,
-        "size": item.get("size") or os.path.getsize(p),
+        "size": sz if sz else os.path.getsize(p),
         "video_tracks": None,          # filled from raw probe when available
         "actions": [],                 # subset of DEF / AUD / SUB / ALL
         "aud_to_remove_a": sorted({aud[a["index"]] for a in c["aud_to_remove"] if a.get("index") in aud}),
@@ -420,7 +426,7 @@ def main():
     print("root:      %s" % args.root)
     print("config:    sub-wl=%r aud-wl=%r default=%r" % (args.subtitle_whitelist, args.audio_whitelist, args.default_audio_language))
     print("files:     scanned=%d  actionable=%d  skipped=%d" % (len(plans), len(actionable), len(skipped)))
-    total_bytes = sum(p["size"] or 0 for p in actionable)
+    total_bytes = sum(int(p.get("size") or 0) for p in actionable)
     print("bytes:     %.1f GiB to be rewritten (each gets a .orig backup + temp)" % (total_bytes / 1024 ** 3))
     if space_problems:
         print("SPACE GATE: FAIL ->")
