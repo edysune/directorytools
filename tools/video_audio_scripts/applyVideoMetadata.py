@@ -470,7 +470,7 @@ def main():
         if not args.backup:
             pass  # user explicitly disabled backups; _restore no-ops without a .orig
         it = next(x for x in items if x["path"] == p["path"])
-        res = apply_file(p, it, args.probe_timeout, keep_backup=args.backup)
+        res = apply_file(p, it, args.probe_timeout, backup=args.backup)
         results.append(res)
         tag = res["status"].upper().ljust(20)
         print("    -> %s %s" % (tag, res.get("detail", "")))

@@ -278,3 +278,126 @@ def test_apply_default_only_no_mux(tmp_path, monkeypatch):
 def test_bin_check_missing(monkeypatch):
     monkeypatch.setattr(avm.shutil, "which", lambda b: None)
     assert avm.bin_check() == ["ffprobe", "mkvmerge", "mkvpropedit"]
+
+
+# --------------------------------------------------------------------------- #
+# main() end-to-end (regression: main loop must call apply_file with the right
+# keyword args and finish the full apply cycle)
+# --------------------------------------------------------------------------- #
+def _main_argv(root, outdir, extra=()):
+    return [
+        "applyVideoMetadata.py", str(root),
+        "--subtitle-whitelist", "English",
+        "--audio-whitelist", "English, Japanese, Korean",
+        "--default-audio-language", "English",
+        "--output-dir", str(outdir),
+        *extra, "--apply",
+    ]
+
+
+def _fake_tools(monkeypatch, fail_mkvmerge: bool):
+    """Fake subprocess.run: ffprobe returns BEFORE/AFTER stream state based on
+    path suffix; mkvmerge copies input to -o (and optionally fails)."""
+    cmds = []
+
+    def before_json(path: Path) -> str:
+        return json.dumps({
+            "format": {"format_name": "matroska,webm",
+                       "duration": "100.0", "size": str(path.stat().st_size)},
+            "streams": [
+                {"index": 0, "codec_type": "video", "codec_name": "h264",
+                 "tags": {}, "disposition": {}},
+                {"index": 1, "codec_type": "audio", "codec_name": "aac",
+                 "tags": {"language": "eng"}, "disposition": {"default": 1}},
+                {"index": 2, "codec_type": "audio", "codec_name": "aac",
+                 "tags": {"language": "fre"}, "disposition": {"default": 0}},
+                {"index": 3, "codec_type": "subtitle", "codec_name": "subrip",
+                 "tags": {"language": "eng"}, "disposition": {}},
+                {"index": 4, "codec_type": "subtitle", "codec_name": "subrip",
+                 "tags": {"language": "fre"}, "disposition": {}},
+            ],
+        })
+
+    def after_json(path: Path) -> str:
+        return json.dumps({
+            "format": {"format_name": "matroska,webm",
+                       "duration": "100.0", "size": str(path.stat().st_size)},
+            "streams": [
+                {"index": 0, "codec_type": "video", "codec_name": "h264",
+                 "tags": {}, "disposition": {}},
+                {"index": 1, "codec_type": "audio", "codec_name": "aac",
+                 "tags": {"language": "eng"}, "disposition": {"default": 1}},
+                {"index": 2, "codec_type": "subtitle", "codec_name": "subrip",
+                 "tags": {"language": "eng"}, "disposition": {}},
+            ],
+        })
+
+    def fake_run(cmd, **kw):
+        cmds.append(cmd)
+        name = cmd[0]
+        if name == "ffprobe":
+            p = Path(cmd[-1])
+            payload = after_json(p) if p.name.endswith(avm.TMP_SUFFIX) else before_json(p)
+            return subprocess.CompletedProcess(cmd, 0, stdout=payload)
+        if name == "mkvmerge":
+            if fail_mkvmerge:
+                raise subprocess.CalledProcessError(1, cmd, output="", stderr="mux boom")
+            out = Path(cmd[cmd.index("-o") + 1])
+            src = Path(cmd[-1])
+            out.write_bytes(src.read_bytes() + b"MUXED")
+            return subprocess.CompletedProcess(cmd, 0)
+        # mkvpropedit / anything else
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr(avm.shutil, "which", lambda b: "/bin/fake-" + b)
+    monkeypatch.setattr(avm.shutil, "disk_usage",
+                        lambda p: type("U", (), {"free": 100 * 1024 ** 3})())
+    return cmds
+
+
+def test_main_apply_end_to_end_ok(tmp_path, monkeypatch, capsys):
+    media = tmp_path / "media" / "Show"
+    media.mkdir(parents=True)
+    vid = media / "Show - S01E01.mkv"
+    vid.write_bytes(b"ORIGINALBYTES")
+    outdir = tmp_path / "out"
+
+    cmds = _fake_tools(monkeypatch, fail_mkvmerge=False)
+    monkeypatch.setattr("sys.argv", _main_argv(tmp_path / "media", outdir))
+
+    rc = avm.main()
+    assert rc == 0
+    # original replaced with muxed content, pristine backup kept, no temp left
+    assert vid.read_bytes() == b"ORIGINALBYTESMUXED"
+    assert (media / "Show - S01E01.mkv.orig").read_bytes() == b"ORIGINALBYTES"
+    assert not (media / "Show - S01E01.mkv.tmp-fix").exists()
+    # muxer got the right per-type removals: fre audio = a2, fre sub = s2
+    mg = [c for c in cmds if c[0] == "mkvmerge"]
+    assert mg and "--no-a:2" in mg[0] and "--no-s:2" in mg[0]
+    # sole-default set on surviving eng audio a1
+    mp = [c for c in cmds if c[0] == "mkvpropedit"]
+    assert mp and "track:a1" in " ".join(mp[0]) and "flag=default" in mp[0]
+    # report written
+    reports = list(outdir.glob("apply_*.json"))
+    assert reports and json.loads(reports[0].read_text())["rc"] == 0
+
+
+def test_main_apply_end_to_end_failure_restores(tmp_path, monkeypatch):
+    media = tmp_path / "media" / "Show"
+    media.mkdir(parents=True)
+    vid = media / "Show - S01E01.mkv"
+    vid.write_bytes(b"ORIGINALBYTES")
+    outdir = tmp_path / "out"
+
+    _fake_tools(monkeypatch, fail_mkvmerge=True)
+    monkeypatch.setattr("sys.argv", _main_argv(tmp_path / "media", outdir))
+
+    rc = avm.main()
+    assert rc == 1
+    # original byte-identical, backup cleaned up, no temp left
+    assert vid.read_bytes() == b"ORIGINALBYTES"
+    assert not (media / "Show - S01E01.mkv.orig").exists()
+    assert not (media / "Show - S01E01.mkv.tmp-fix").exists()
+    reports = list(outdir.glob("apply_*.json"))
+    assert reports and json.loads(reports[0].read_text())["rc"] == 1
