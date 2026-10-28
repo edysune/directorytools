@@ -82,6 +82,60 @@ def is_unknown_lang(lang) -> bool:
     return not lang or str(lang).lower().strip() in UNKNOWN_LANGS
 
 
+# ---------------------------------------------------------------------------
+# Track "language" tri-state classifier (Phase-1 policy per user, 2026-10-28)
+#
+# A stream's `language` field is one of:
+#   * "keep"       — matches the whitelist (e.g. English).          -> kept
+#   * "confirmed"  — a known, specific non-whitelisted language     -> may be removed
+#                    (fre, ara, jpn, chi, dan, fin, nor, swe, ...).   (RISK-1: removing ALL
+#                    is only ever allowed when EVERY track is confirmed)
+#   * "ambiguous"  — cannot be proven non-English / not clearly a   -> NEVER removed;
+#                    language at all (untagged 'und'/''/'unknown',     held on the EXCLUDE
+#                    a leaked subtitle-title / fan-sub group "name",   LIST for human review.
+#                    a format token ASS/SRT, a channel label           Closes BUG-5 (und) and
+#                    Stereo/Surround/MRSK).                            RISK-2 (fan-sub leak).
+#
+# Rationale (user): "if there is any ambiguity then we do NOT want to remove those
+# subtitles"; "Nekomimi/Chihiro could be a good English sub — don't delete data we can
+# get back only with pain"; "40 files we can allow removal" (100% confirmed non-English),
+# "2 with the ASS/SRT issue we can exclude", "exclude People of Earth (matched English[CC])".
+# ---------------------------------------------------------------------------
+# Tokens we KNOW are not languages (subtitle formats / audio channel-mix labels that
+# leaked into the `language` field via the scan's title-fallback).
+_LEAK_TOKENS = {
+    "ass", "ssa", "srt", "vtt",                 # subtitle formats
+    "stereo", "surround", "dual mono", "dual-mono",   # channel mix
+    "morsk", "morsk2", "audio", "main", "original", "commentary",
+}
+_TITLISH = re.compile(r"[\s\-/\\[\]{}|]")      # a real language code/name never has these
+
+
+def is_ambiguous_lang(lang) -> bool:
+    """True if this value is NOT a confirmed specific language: it is untagged/unknown,
+    a leaked format/fan-sub/channel-name (title-like), hence treated as 'could be English'
+    and must NOT be auto-removed."""
+    if is_unknown_lang(lang):
+        return True
+    s = str(lang).strip()
+    if not s:
+        return True
+    if s.lower() in _LEAK_TOKENS:
+        return True
+    if _TITLISH.search(s):          # spaces/dashes/brackets => a title or mix label, not a lang
+        return True
+    return False
+
+
+def lang_state(lang, whitelist: str) -> str:
+    """Classify one track's language value: 'keep', 'confirmed', or 'ambiguous'."""
+    if is_ambiguous_lang(lang):
+        return "ambiguous"
+    if language_matches_whitelist(lang, whitelist):
+        return "keep"
+    return "confirmed"          # specific, known, non-whitelisted language
+
+
 def norm(p: str) -> str:
     return os.path.normpath(os.path.abspath(p))
 
@@ -200,30 +254,43 @@ def collect_files(roots, ignore: set):
 
 
 def classify(item: dict, sub_wl: str, audio_wl: str, default_lang: str) -> dict:
-    """Apply fixer decision rules + safety guardrails to one scanned file."""
-    c = {
-        "default_audio_fixable": False,
-        "default_missing": False,
-        "audio_removal_fixable": False,
-        "subtitle_removal_fixable": False,
-        "all_subs_would_be_lost": False,
-        "blocked_unknown": False,
-        "missing_preferred_audio": False,
-        "no_audio": False,
-        "timing_issues": [],
-        "unknown_audio": [],
-        "unknown_sub": [],
-        "audio_to_remove": [],
-        "subtitle_to_remove": [],
-    }
+    """Apply fixer decision rules + safety guardrails to one scanned file.
+
+    Policy (user, 2026-10-28) — a stream's language value is one of:
+      "keep"       = whitelist match (English)            -> kept
+      "confirmed"  = known specific non-English language  -> may be removed
+      "ambiguous"  = untagged / fan-sub-title / format /  -> NEVER removed (EXCLUDE LIST)
+                     channel-label / suspected-English
+
+    Removal is only ever planned for "confirmed" tracks, and only when a "keep"
+    track remains in that media type — EXCEPT removing ALL subtitles, which is allowed
+    only when EVERY subtitle is "confirmed" (user-approved RISK-1: 100% non-English).
+    ANY "ambiguous" track in a media type -> the whole file is held for that type.
+    DRY-RUN: none of this is applied, it is only reported.
+    """
     audio = item.get("audio_streams") or []
     subs = item.get("subtitle_streams") or []
 
-    c["unknown_audio"] = [a for a in audio if is_unknown_lang(a.get("language"))]
-    c["unknown_sub"] = [s for s in subs if is_unknown_lang(s.get("language"))]
-    c["blocked_unknown"] = bool(c["unknown_audio"] or c["unknown_sub"])
+    c = {
+        "default_audio_fixable": False,
+        "default_missing": False,
+        "missing_preferred_audio": False,
+        "no_audio": False,
+        "timing_issues": [],
+        # ---- subtitles ----
+        "sub_state": "none",                   # none|clean|remove_confirmed|remove_all_approved|held_ambiguous
+        "subtitle_removal_fixable": False,     # True when sub_state in {remove_confirmed, remove_all_approved}
+        "sub_to_remove": [],
+        "sub_held": [],
+        "subs_all_would_be_lost": False,       # informational: removing this = removing every sub
+        # ---- audio ----
+        "aud_state": "none",                   # none|clean|remove_confirmed|held_ambiguous
+        "audio_removal_fixable": False,        # True when aud_state == remove_confirmed
+        "aud_to_remove": [],
+        "aud_held": [],
+    }
 
-    # ---- audio: default track ----
+    # ---- audio: default-track handling (unchanged from Phase-1 dry-run) ----
     defaults = [a for a in audio if a.get("default")]
     if audio:
         preferred = [a for a in audio if language_matches_whitelist(a.get("language"), default_lang)]
@@ -236,27 +303,42 @@ def classify(item: dict, sub_wl: str, audio_wl: str, default_lang: str) -> dict:
     else:
         c["no_audio"] = True
 
-    # ---- audio removal ----
-    if len(audio) > 1 and not c["unknown_audio"]:
-        wl_pos = [i for i, a in enumerate(audio) if language_matches_whitelist(a.get("language"), audio_wl)]
-        rem_pos = [
-            i for i, a in enumerate(audio)
-            if not is_unknown_lang(a.get("language")) and not language_matches_whitelist(a.get("language"), audio_wl)
-        ]
-        if wl_pos and rem_pos:  # >=1 whitelisted remains; never remove all
+    # ---- audio removal (tri-state: never touch a file with an ambiguous track) ----
+    if audio:
+        aud_states = [lang_state(a.get("language"), audio_wl) for a in audio]
+        keep_i = [i for i, s in enumerate(aud_states) if s == "keep"]
+        conf_i = [i for i, s in enumerate(aud_states) if s == "confirmed"]
+        amb_i = [i for i, s in enumerate(aud_states) if s == "ambiguous"]
+        c["aud_held"] = [audio[i] for i in amb_i]
+        if amb_i:
+            c["aud_state"] = "held_ambiguous"          # und / Stereo / MRSK / label -> keep original, do not delete
+        elif len(audio) > 1 and keep_i and conf_i:
+            c["aud_state"] = "remove_confirmed"        # >=1 keep remains; remove only confirmed-non-English
+            c["aud_to_remove"] = [audio[i] for i in conf_i]
             c["audio_removal_fixable"] = True
-            c["audio_to_remove"] = [audio[i] for i in rem_pos]
+        else:
+            c["aud_state"] = "clean"
 
-    # ---- subtitle removal (safe subset: >=1 whitelisted sub must remain) ----
-    if subs and not c["unknown_sub"]:
-        wl_subs = [s for s in subs if language_matches_whitelist(s.get("language"), sub_wl)]
-        rem_subs = [s for s in subs if not is_unknown_lang(s.get("language")) and not language_matches_whitelist(s.get("language"), sub_wl)]
-        if wl_subs and rem_subs:
+    # ---- subtitle removal (tri-state: ambiguous -> hold on exclude list) ----
+    if subs:
+        sub_states = [lang_state(s.get("language"), sub_wl) for s in subs]
+        keep_i = [i for i, s in enumerate(sub_states) if s == "keep"]
+        conf_i = [i for i, s in enumerate(sub_states) if s == "confirmed"]
+        amb_i = [i for i, s in enumerate(sub_states) if s == "ambiguous"]
+        c["sub_held"] = [subs[i] for i in amb_i]
+        if amb_i:
+            c["sub_state"] = "held_ambiguous"          # RISK-2 fan-sub / ASS-SRT / und / English[CC] -> do NOT remove
+        elif keep_i and conf_i:
+            c["sub_state"] = "remove_confirmed"        # English present -> remove only confirmed-non-English
+            c["sub_to_remove"] = [subs[i] for i in conf_i]
             c["subtitle_removal_fixable"] = True
-            c["subtitle_to_remove"] = rem_subs
-        elif rem_subs and not wl_subs and len(rem_subs) == len(subs):
-            # every sub would be removed -> guardrail: never remove all subs
-            c["all_subs_would_be_lost"] = True
+        elif (not keep_i) and conf_i and len(conf_i) == len(subs):
+            c["sub_state"] = "remove_all_approved"     # 100% confirmed non-English -> user-approved (RISK-1, 40 files)
+            c["sub_to_remove"] = [subs[i] for i in conf_i]
+            c["subtitle_removal_fixable"] = True
+            c["subs_all_would_be_lost"] = True
+        else:
+            c["sub_state"] = "clean"
 
     # ---- timing checks (mirror analyzeVideoMetadata.analyze) ----
     dur = item.get("duration")
@@ -317,51 +399,85 @@ def summarize(items: list, classes: dict, sidecars: list, strays: list,
                 by_dir[os.path.join(*parts[:2]) if len(parts) > 2 else parts[0]] += 1
                 break
 
-    def bucket(key, files=None):
+    def bucket(key):
         out = []
         for it, c in zip(items, classes.values()):
-            if c[key]:
+            if c.get(key):
                 e = {"path": it["path"]}
-                if key in ("default_audio_fixable",):
+                if key == "default_audio_fixable":
                     e["current_default"] = [a.get("language") for a in it.get("audio_streams", []) if a.get("default")]
                     e["preferred_available"] = [a.get("language") for a in it.get("audio_streams", []) if language_matches_whitelist(a.get("language"), opts.default_audio_language)]
-                if key == "audio_removal_fixable":
-                    e["remove"] = c["audio_to_remove"]
-                if key == "subtitle_removal_fixable":
-                    e["remove"] = c["subtitle_to_remove"]
-                if key == "blocked_unknown":
-                    e["unknown_audio"] = c["unknown_audio"]
-                    e["unknown_sub"] = c["unknown_sub"]
-                if key == "all_subs_would_be_lost":
-                    e["subs"] = [s.get("language") for s in it.get("subtitle_streams", [])]
                 if key == "timing_issues":
                     e["timing"] = c["timing_issues"]
                 if key == "no_audio":
                     e["note"] = "file has no audio streams"
+                if key == "default_missing":
+                    e["note"] = "no default-flagged audio track"
+                if key == "missing_preferred_audio":
+                    e["note"] = "no whitelisted audio language present"
+                out.append(e)
+        return out
+
+    def state_bucket(statekey, targets, fields):
+        out = []
+        for it, c in zip(items, classes.values()):
+            if c.get(statekey) in targets:
+                e = {"path": it["path"]}
+                for f in fields:
+                    if f in c:
+                        e[f] = c[f]
                 out.append(e)
         return out
 
     issues = {
         "default_audio": bucket("default_audio_fixable"),
-        "audio": bucket("audio_removal_fixable"),
-        "subtitles": bucket("subtitle_removal_fixable"),
-        "unknown": bucket("blocked_unknown"),
+        "audio_removal": state_bucket("aud_state", {"remove_confirmed"}, ["aud_to_remove"]),
+        "sub_keep_english_removal": state_bucket("sub_state", {"remove_confirmed"}, ["sub_to_remove"]),
+        "sub_all_removal_approved": state_bucket("sub_state", {"remove_all_approved"}, ["sub_to_remove"]),
+        "sub_held_ambiguous": state_bucket("sub_state", {"held_ambiguous"}, ["sub_held"]),
+        "audio_held_ambiguous": state_bucket("aud_state", {"held_ambiguous"}, ["aud_held"]),
         "timing": bucket("timing_issues"),
-        "all_subs_would_be_lost": bucket("all_subs_would_be_lost"),
         "default_missing": bucket("default_missing"),
         "no_audio": bucket("no_audio"),
         "missing_preferred_audio": bucket("missing_preferred_audio"),
     }
+    # ---- exclude list: the persistent, reviewable artifact (user 2026-10-28) ----
+    # Every "ambiguous" (suspected-English / untagged / fan-sub-title / channel-label)
+    # track is HELD here rather than removed. 'pending-review' = temporary (user to
+    # confirm). 'permanent' = user may add non-video folders / foreign-nature shows.
+    exclude_tracks = []
+    for it, c in zip(items, classes.values()):
+        for kind, held in (("subtitle", c["sub_held"]), ("audio", c["aud_held"])):
+            for tr in held:
+                exclude_tracks.append({
+                    "source": "auto: suspected-English/untagged/fan-sub/label",
+                    "kind": kind,
+                    "value": tr.get("language"),
+                    "file": it["path"],
+                    "status": "pending-review",
+                })
+    exclude_list = {
+        "note": ("Tracks HELD from removal (dry-run, nothing deleted). pending-review = temporary "
+                 "(user to confirm/fix later). User may add permanent entries: non-video folder "
+                 "paths, and foreign-nature shows to keep original audio. See user_overrides."),
+        "pending_review_files": sorted({e["file"] for e in exclude_tracks}),
+        "tracks": exclude_tracks,
+        "user_overrides": [],
+    }
     counts = {
         "default_audio_fixable": len(issues["default_audio"]),
-        "audio_removal_fixable": len(issues["audio"]),
-        "subtitle_removal_fixable": len(issues["subtitles"]),
-        "blocked_unknown": len(issues["unknown"]),
+        "audio_removal_fixable": len(issues["audio_removal"]),
+        "subtitle_removal_keep_english": len(issues["sub_keep_english_removal"]),
+        "subtitle_removal_all_approved": len(issues["sub_all_removal_approved"]),
+        "subtitle_held_ambiguous": len(issues["sub_held_ambiguous"]),
+        "audio_held_ambiguous": len(issues["audio_held_ambiguous"]),
+        "subtitle_fixable_total": len(issues["sub_keep_english_removal"]) + len(issues["sub_all_removal_approved"]),
         "timing_issues": len(issues["timing"]),
-        "all_subs_would_be_lost": len(issues["all_subs_would_be_lost"]),
         "default_missing": len(issues["default_missing"]),
         "no_audio": len(issues["no_audio"]),
         "missing_preferred_audio": len(issues["missing_preferred_audio"]),
+        "exclude_tracks": len(exclude_tracks),
+        "exclude_pending_review_files": len(exclude_list["pending_review_files"]),
     }
 
     report = {
@@ -381,6 +497,7 @@ def summarize(items: list, classes: dict, sidecars: list, strays: list,
         "stray_temp_files": strays,
         "issues": issues,
         "counts": counts,
+        "exclude_list": exclude_list,
         "language_frequencies": {
             "audio": dict(audio_langs.most_common()),
             "subtitle": dict(sub_langs.most_common()),
@@ -406,19 +523,23 @@ def write_markdown(report: dict, path: Path):
              f"default={report['config']['default_audio_language']!r}")
     L.append(f"- files scanned: **{report['files_scanned']}** | sidecars: {report['sidecar_count']} | stray temp: {len(report['stray_temp_files'])}")
     L.append("")
-    L.append("## Issues (fix candidates, dry-run)")
+    L.append("## Issues (dry-run — read-only, NOTHING HAS BEEN MODIFIED)")
     L.append("")
     L.append("| category | files |")
     L.append("|---|---:|")
-    L.append(f"| default audio needs re-order | {c['default_audio_fixable']} |")
-    L.append(f"| non-whitelisted audio would be removed | {c['audio_removal_fixable']} |")
-    L.append(f"| non-whitelisted subs would be removed | {c['subtitle_removal_fixable']} |")
-    L.append(f"| blocked: unknown-language track (report only) | {c['blocked_unknown']} |")
+    L.append(f"| default audio needs re-order to English | {c['default_audio_fixable']} |")
+    L.append(f"| non-whitelisted audio would be removed (English kept) | {c['audio_removal_fixable']} |")
+    L.append(f"| non-whitelisted subs would be removed (English kept) | {c['subtitle_removal_keep_english']} |")
+    L.append(f"| **RISK-1 (USER-APPROVED): all subs are 100% confirmed non-English — can remove all** | {c['subtitle_removal_all_approved']} |")
+    L.append(f"| **EXCLUDE — subtitles held (suspected-English/untagged/fan-sub, BUG-5/RISK-2)** | {c['subtitle_held_ambiguous']} |")
+    L.append(f"| **EXCLUDE — audio held (untagged/label, keep original; BUG-5)** | {c['audio_held_ambiguous']} |")
     L.append(f"| subtitle timing issues | {c['timing_issues']} |")
-    L.append(f"| **would lose ALL subs — needs your call (RISK-1)** | {c['all_subs_would_be_lost']} |")
     L.append(f"| no default audio track | {c['default_missing']} |")
     L.append(f"| no audio streams at all | {c['no_audio']} |")
     L.append(f"| no whitelisted audio present (unfixable) | {c['missing_preferred_audio']} |")
+    L.append("")
+    L.append(f"**Actionable removals (would run, if approved): {c['subtitle_fixable_total']} subtitle + {c['audio_removal_fixable']} audio + {c['default_audio_fixable']} default-order.** "
+             f"Held/excluded: {c['exclude_pending_review_files']} files, {c['exclude_tracks']} tracks (see exclude list below).")
     L.append("")
     L.append("## Language frequencies")
     L.append("")
@@ -432,19 +553,36 @@ def write_markdown(report: dict, path: Path):
     for d, n_ in list(report["per_directory"].items())[:40]:
         L.append(f"| {d} | {n_} |")
     L.append("")
-    if report["issues"]["all_subs_would_be_lost"]:
-        L.append("## RISK-1: files where removing non-whitelisted subs would remove ALL subs")
+    if report["issues"]["sub_all_removal_approved"]:
+        L.append("## RISK-1 (USER-APPROVED): all subs are 100% confirmed non-English → safe to remove all")
         L.append("")
-        for e in report["issues"]["all_subs_would_be_lost"][:200]:
-            L.append(f"- `{e['path']}` — subs: {', '.join(e['subs'])}")
-    if report["issues"]["unknown"]:
+        L.append("_Approval given 2026-10-28. Dry-run only — not applied._")
         L.append("")
-        L.append("## Unknown-language streams (report only; includes ISO 'und' — BUG-5)")
+        for e in report["issues"]["sub_all_removal_approved"]:
+            langs = sorted({str(s.get("language")) for s in e.get("sub_to_remove", [])})
+            L.append(f"- `{e['path']}` — subs: {', '.join(langs) or '-'}")
+    if report["issues"]["sub_held_ambiguous"]:
         L.append("")
-        for e in report["issues"]["unknown"][:200]:
-            ua = ", ".join(str(a.get("language")) for a in e["unknown_audio"])
-            us = ", ".join(str(s.get("language")) for s in e["unknown_sub"])
-            L.append(f"- `{e['path']}` — audio: {ua or '-'} | subs: {us or '-'}")
+        L.append("## EXCLUDE LIST — subtitles HELD (suspected-English / untagged / fan-sub-title / format) — NOT removed")
+        L.append("")
+        L.append("_BUG-5 + RISK-2 per user: 'if we suspect it is English, put it on the exclude list.' "
+                 "These are pending-review; fix later rather than delete valuable subs._")
+        L.append("")
+        for e in report["issues"]["sub_held_ambiguous"]:
+            vals = sorted({str(s.get("language")) for s in e.get("sub_held", [])})
+            L.append(f"- `{e['path']}` — held: {', '.join(vals) or '(untagged)'}")
+    if report["issues"]["audio_held_ambiguous"]:
+        L.append("")
+        L.append(f"## EXCLUDE LIST — audio HELD ({len(report['issues']['audio_held_ambiguous'])} files; sample below)")
+        L.append("")
+        L.append("_Untagged (`und`) or channel/label tracks (Stereo, MRSK, ...). Kept — user prefers original audio; "
+                 "BUG-5 (`und` must never be treated as removable)._")
+        L.append("")
+        for e in report["issues"]["audio_held_ambiguous"][:120]:
+            vals = sorted({str(a.get("language")) for a in e.get("aud_held", [])} - {None, ""})
+            L.append(f"- `{e['path']}` — held: {', '.join(vals) or '(untagged)'}")
+        if len(report["issues"]["audio_held_ambiguous"]) > 120:
+            L.append(f"- … and {len(report['issues']['audio_held_ambiguous']) - 120} more (see report.json)")
     if report["stray_temp_files"]:
         L.append("")
         L.append("## Stray temp files found (possible crashed prior fix run)")
@@ -471,6 +609,9 @@ def main():
     ap.add_argument("--output-dir", default="output")
     ap.add_argument("--jobs", type=int, default=16)
     ap.add_argument("--ffprobe-timeout", type=float, default=60.0)
+    ap.add_argument("--from-scan",
+                    help="Reuse an existing baseline_*_scan.json (prior ffprobe results) instead of re-scanning. "
+                         "Use this to re-apply a changed policy/whitelist to a Phase-1 baseline in seconds.")
     opts = ap.parse_args()
 
     # config file (optional); CLI overrides win
@@ -510,19 +651,31 @@ def main():
     print(f"collected {len(videos)} videos, {len(sidecars)} sidecars, "
           f"{len(strays)} stray temp files; scanning with {opts.jobs} workers...", file=sys.stderr)
 
-    results, failures = [], 0
-    if videos:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=opts.jobs) as ex:
-            futs = {ex.submit(analyze_file, Path(v), opts.ffprobe_timeout): v for v in videos}
-            done = 0
-            for fut in concurrent.futures.as_completed(futs):
-                res = fut.result()
-                if "error" in res:
-                    failures += 1
-                results.append(res)
-                done += 1
-                if done % 400 == 0:
-                    print(f"  scanned {done}/{len(videos)} ({failures} probe failures)", file=sys.stderr)
+    if opts.from_scan:
+        # Fast policy re-decision: reuse prior ffprobe results (no re-probe).
+        with open(opts.from_scan, "r", encoding="utf-8") as fh:
+            prior = json.load(fh)
+        results = prior.get("results", [])
+        failures = sum(1 for r in results if "error" in r)
+        n_ok = len(results) - failures
+        print(f"--from-scan: reusing {n_ok} prior ffprobe results from {opts.from_scan} "
+              f"({failures} probe failures carried forward)", file=sys.stderr)
+        sidecars = prior.get("sidecar_subtitle_files") or sidecars
+        strays = prior.get("stray_temp_files") or strays
+    else:
+        results, failures = [], 0
+        if videos:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=opts.jobs) as ex:
+                futs = {ex.submit(analyze_file, Path(v), opts.ffprobe_timeout): v for v in videos}
+                done = 0
+                for fut in concurrent.futures.as_completed(futs):
+                    res = fut.result()
+                    if "error" in res:
+                        failures += 1
+                    results.append(res)
+                    done += 1
+                    if done % 400 == 0:
+                        print(f"  scanned {done}/{len(videos)} ({failures} probe failures)", file=sys.stderr)
 
     results.sort(key=lambda r: r["path"])
     classes = {}
@@ -554,7 +707,7 @@ def main():
     write_markdown(report, md_out)
 
     status = "ok"
-    if failures or report["issues"]["all_subs_would_be_lost"] or not ok_items:
+    if failures or not ok_items:
         status = "partial" if ok_items else "failed"
 
     summary = {
@@ -565,12 +718,17 @@ def main():
         "scanned": len(ok_items),
         "issues": {
             "default_audio": report["counts"]["default_audio_fixable"],
-            "audio": report["counts"]["audio_removal_fixable"],
-            "subtitles": report["counts"]["subtitle_removal_fixable"],
-            "unknown": report["counts"]["blocked_unknown"],
+            "audio_remove": report["counts"]["audio_removal_fixable"],
+            "subtitles_remove_keep_english": report["counts"]["subtitle_removal_keep_english"],
+            "subtitles_remove_all_approved": report["counts"]["subtitle_removal_all_approved"],
             "timing": report["counts"]["timing_issues"],
         },
-        "would_lose_all_subs": report["counts"]["all_subs_would_be_lost"],
+        "held_ambiguous": {
+            "subtitle_files": report["counts"]["subtitle_held_ambiguous"],
+            "audio_files": report["counts"]["audio_held_ambiguous"],
+            "tracks": report["counts"]["exclude_tracks"],
+            "pending_review_files": report["counts"]["exclude_pending_review_files"],
+        },
         "applied": 0,
         "failed": failures,
         "skipped": 0,
