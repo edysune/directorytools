@@ -20,7 +20,11 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from fixVideoMetadata import language_matches_whitelist
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # shared-policy import (script & package runs)
+import languagePolicy  # noqa: E402
+# Back-compat local name; single source of truth = languagePolicy (strict, no fuzzy).
+language_matches_whitelist = languagePolicy.matches_whitelist
 
 
 def find_latest_scan_file(output_dir: Path) -> Path:
@@ -253,8 +257,6 @@ def analyze_subtitle_whitelist(scan_json: dict, subtitle_whitelist=None):
     Returns:
         List of items with subtitle_not_in_whitelist issues
     """
-    from fixVideoMetadata import language_matches_whitelist
-    
     results = scan_json.get("results") or []
     
     def parse_language_list(value):
@@ -389,8 +391,6 @@ def analyze_audio_whitelist(scan_json: dict, audio_whitelist=None):
     Returns:
         List of items with audio_streams_not_in_whitelist issues
     """
-    from fixVideoMetadata import language_matches_whitelist
-    
     results = scan_json.get("results") or []
     
     def parse_language_list(value):

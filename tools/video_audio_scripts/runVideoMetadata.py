@@ -50,8 +50,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-# Reuse the project's language matcher; do NOT duplicate it (standing rule).
-from fixVideoMetadata import language_matches_whitelist  # noqa: E402
+# Shared language policy — single source of truth; do NOT duplicate (standing rule).
+import languagePolicy  # noqa: E402
 
 JOB_NAME = "video_metadata"
 MODE = "dry-run"
@@ -62,10 +62,10 @@ VIDEO_EXTS = {
 }
 SUBTITLE_EXTS = {".srt", ".ass", ".ssa"}
 
-# ISO-639-2/B 'und' (undetermined) is an unknown language too.
-# fixVideoMetadata.py's skip set is ("unknown", "none") and does NOT include
-# 'und' (BUG-5) — this runner treats it as unknown and refuses to fix it.
-UNKNOWN_LANGS = {"", "none", "unknown", "und"}
+# ISO-639-2/B 'und' (undetermined) is an unknown language too (BUG-5): the old
+# fixer skip set was ("unknown", "none") and missed it; the policy module
+# treats it as unknown, and we hold rather than fix.
+UNKNOWN_LANGS = languagePolicy.UNKNOWN_LANGS
 
 STRAY_TEMP_RE = re.compile(r"\.(tmp|fixed)\.[A-Za-z0-9]+$")
 
@@ -78,62 +78,27 @@ def ts_tag() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
 
 
-def is_unknown_lang(lang) -> bool:
-    return not lang or str(lang).lower().strip() in UNKNOWN_LANGS
+is_unknown_lang = languagePolicy.is_unknown_lang
 
 
 # ---------------------------------------------------------------------------
 # Track "language" tri-state classifier (Phase-1 policy per user, 2026-10-28)
 #
-# A stream's `language` field is one of:
-#   * "keep"       — matches the whitelist (e.g. English).          -> kept
-#   * "confirmed"  — a known, specific non-whitelisted language     -> may be removed
-#                    (fre, ara, jpn, chi, dan, fin, nor, swe, ...).   (RISK-1: removing ALL
-#                    is only ever allowed when EVERY track is confirmed)
-#   * "ambiguous"  — cannot be proven non-English / not clearly a   -> NEVER removed;
-#                    language at all (untagged 'und'/''/'unknown',     held on the EXCLUDE
-#                    a leaked subtitle-title / fan-sub group "name",   LIST for human review.
-#                    a format token ASS/SRT, a channel label           Closes BUG-5 (und) and
-#                    Stereo/Surround/MRSK).                            RISK-2 (fan-sub leak).
+# A stream's `language` field classifies as 'keep' / 'confirmed' / 'ambiguous'
+# (see languagePolicy for the authoritative rules and rationale):
+#   keep       — whitelist match (English)                         -> kept
+#   confirmed  — known specific non-whitelisted language           -> removable
+#                (RISK-1: removing ALL subs is only allowed when
+#                EVERY sub is confirmed non-English — 40 files)
+#   ambiguous  — untagged/und, ASS/SRT, Stereo/Surround/MRSK,      -> NEVER removed;
+#                fan-sub names, suspected-English (English [CC])    EXCLUDE list
+# Closes BUG-5 (und) and RISK-2 (title/label leak); user rule: "if there is
+# any ambiguity then we do NOT want to remove those subtitles".
 #
-# Rationale (user): "if there is any ambiguity then we do NOT want to remove those
-# subtitles"; "Nekomimi/Chihiro could be a good English sub — don't delete data we can
-# get back only with pain"; "40 files we can allow removal" (100% confirmed non-English),
-# "2 with the ASS/SRT issue we can exclude", "exclude People of Earth (matched English[CC])".
-# ---------------------------------------------------------------------------
-# Tokens we KNOW are not languages (subtitle formats / audio channel-mix labels that
-# leaked into the `language` field via the scan's title-fallback).
-_LEAK_TOKENS = {
-    "ass", "ssa", "srt", "vtt",                 # subtitle formats
-    "stereo", "surround", "dual mono", "dual-mono",   # channel mix
-    "morsk", "morsk2", "audio", "main", "original", "commentary",
-}
-_TITLISH = re.compile(r"[\s\-/\\[\]{}|]")      # a real language code/name never has these
-
-
-def is_ambiguous_lang(lang) -> bool:
-    """True if this value is NOT a confirmed specific language: it is untagged/unknown,
-    a leaked format/fan-sub/channel-name (title-like), hence treated as 'could be English'
-    and must NOT be auto-removed."""
-    if is_unknown_lang(lang):
-        return True
-    s = str(lang).strip()
-    if not s:
-        return True
-    if s.lower() in _LEAK_TOKENS:
-        return True
-    if _TITLISH.search(s):          # spaces/dashes/brackets => a title or mix label, not a lang
-        return True
-    return False
-
-
-def lang_state(lang, whitelist: str) -> str:
-    """Classify one track's language value: 'keep', 'confirmed', or 'ambiguous'."""
-    if is_ambiguous_lang(lang):
-        return "ambiguous"
-    if language_matches_whitelist(lang, whitelist):
-        return "keep"
-    return "confirmed"          # specific, known, non-whitelisted language
+# Re-exports (single source of truth = languagePolicy.py):
+language_matches_whitelist = languagePolicy.matches_whitelist   # STRICT (no fuzzy prefix matching)
+is_ambiguous_lang = languagePolicy.is_ambiguous_lang
+lang_state = languagePolicy.lang_state
 
 
 def norm(p: str) -> str:
@@ -230,10 +195,12 @@ def collect_files(roots, ignore: set):
             continue
         for dirpath, dirnames, filenames in os.walk(root_n):
             dir_n = dirpath
-            # prune ignored dirs in place
+            # prune ignored dirs + foreign-category dirs in place (user: skip foreign
+            # content entirely — no audio/sub removal, no default re-order)
             dirnames[:] = [
                 d for d in dirnames
                 if norm(os.path.join(dir_n, d)) not in ignore
+                and d.lower() not in languagePolicy.EXCLUDED_CATEGORIES
             ]
             for name in filenames:
                 full = os.path.join(dir_n, name)

@@ -4,20 +4,27 @@ from pathlib import Path
 from tools.video_audio_scripts import analyzeVideoMetadata as avm
 
 
-def test_is_english():
-    assert avm.is_english('eng')
-    assert avm.is_english('en')
-    assert avm.is_english('English')
-    assert not avm.is_english('jpn')
-    assert not avm.is_english(None)
-    assert not avm.is_english('')
+def test_english_whitelist_match_strict():
+    """analyze keeps the local name `language_matches_whitelist`; it must be
+    the STRICT policy matcher (no fuzzy prefix matching)."""
+    m = avm.language_matches_whitelist
+    assert m("eng", "English") is True
+    assert m("en", "English") is True
+    assert m("English", "English") is True
+    assert not m("jpn", "English")
+    assert not m(None, "English")
+    assert not m("", "English")
+    # strict (no fuzzy prefix), and ambiguous values never match:
+    assert not m("und", "English")
+    assert not m("English [CC]", "English")
+    assert not m("morsk", "English")
 
 
-def test_matches_any():
-    assert avm.matches_any('japanese', ['jpn'])
-    assert avm.matches_any('jp', ['jpn'])
-    assert avm.matches_any('english', ['eng'])
-    assert not avm.matches_any('spanish', ['eng', 'jpn'])
+def test_whitelist_multi_entry():
+    m = avm.language_matches_whitelist
+    assert m("jpn", "English, Japanese, Korean") is True
+    assert m("kor", "English, Japanese, Korean") is True
+    assert not m("fre", "English, Japanese, Korean")
 
 
 def test_analyze_basic():
@@ -54,15 +61,15 @@ def test_analyze_basic():
         ]
     }
 
-    default_audio, subtitle, unknown = avm.analyze(scan, ignore_patterns=None, require_default_english=False)
+    default_audio, subtitle, unknown, timing = avm.analyze(
+        scan,
+        subtitle_whitelist='English',
+        default_audio_language='English',
+        audio_whitelist='English',
+    )
     # video1 should appear in default_audio (default non-eng but has eng)
     assert any(d['path'].endswith('video1.mkv') for d in default_audio)
     # subtitle issues for video1
     assert any(s['path'].endswith('video1.mkv') for s in subtitle)
     # unknown for video3
     assert any(u['path'].endswith('video3.mkv') for u in unknown)
-
-    # test require_default_english flag - should include video1 and video3 as default not english
-    default_audio2, _, _ = avm.analyze(scan, ignore_patterns=None, require_default_english=True)
-    assert any(d['path'].endswith('video1.mkv') for d in default_audio2)
-    assert any(d['path'].endswith('video3.mkv') for d in default_audio2)
