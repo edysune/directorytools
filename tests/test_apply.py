@@ -21,7 +21,11 @@ import runVideoMetadata as rv
 
 
 def make_item(path, aud, subs, fmt="matroska,webm", dur="100.0"):
-    """Build a scan-schema item with sequential global stream indices."""
+    """Build a scan-schema item with sequential global stream indices.
+
+    Indices start at 1 to mirror real files (stream 0 is the video track,
+    which the apply engine never touches).
+    """
     item = {
         "path": str(path),
         "filename": Path(path).name,
@@ -31,7 +35,7 @@ def make_item(path, aud, subs, fmt="matroska,webm", dur="100.0"):
         "audio_streams": [],
         "subtitle_streams": [],
     }
-    idx = 0
+    idx = 1  # 0 = (implicit) video track
     for lang, default in aud:
         item["audio_streams"].append(
             {"index": idx, "codec": "aac", "language": lang, "default": default,
@@ -254,30 +258,85 @@ def test_apply_backup_conflict_skips(tmp_path, monkeypatch):
     assert (tmp_path / "x.mkv.orig").read_bytes() == b"TRUE ORIGINAL"
 
 
-def test_apply_default_only_no_mux(tmp_path, monkeypatch):
+def test_apply_default_only_full_copy_mux(tmp_path, monkeypatch):
     p = tmp_path / "d.mkv"
     p.write_bytes(b"ORIGINALBYTES")
     item = make_item(p, [("fre", True), ("eng", False)], [])
     pl = avm.plan_file(item, "English", "English, Japanese, Korean, French", "English")
     assert pl["default_target_a"] == 2 and not pl["aud_to_remove_a"]
+    # globals: eng audio is global index 2; fre (survives) gets an explicit false flag
+    assert pl["default_target_global"] == 2
+    assert pl["default_others_global"] == [1]
     after_item = make_item(p, [("fre", False), ("eng", True)], [])
     raw_after = {"streams": [{"codec_type": "video"}, {"codec_type": "audio"}, {"codec_type": "audio"}]}
     cmds_list = _mock_tools(monkeypatch, after_item, raw_after)
     res = avm.apply_file(pl, item, probe_timeout=5)
     assert res["status"] == "ok", res
-    # no muxer invoked, only mkvpropedit against the original file
-    assert not any(c[0] == "mkvmerge" for c in cmds_list)
-    mp = [c for c in cmds_list if c[0] == "mkvpropedit"][0]
-    assert "--set" in mp and "flag=default" in mp
-    assert str(p) in mp
-    # original file untouched content (no mux), backup exists
-    assert p.read_bytes() == b"ORIGINALBYTES"
+    # DEF now requires a full stream-copy re-mux; the flag comes from mkvmerge
+    mg = [c for c in cmds_list if c[0] == "mkvmerge"]
+    assert len(mg) == 1
+    cmd = mg[0]
+    assert "-y" not in cmd
+    assert not any(a.startswith("--no-") for a in cmd)
+    assert "--default-track-flag" in cmd
+    i = cmd.index("--default-track-flag")
+    assert cmd[i + 1] == "2:true"
+    j = cmd.index("--default-track-flag", i + 2)
+    assert cmd[j + 1] == "1:false"
+    assert cmd[-1] == str(p)
+    assert not any(c[0] == "mkvpropedit" for c in cmds_list)
+    # fully replaced (re-muxed copy), pristine backup kept
+    assert p.read_bytes() == b"MUXED"
     assert (tmp_path / "d.mkv.orig").read_bytes() == b"ORIGINALBYTES"
 
 
+# --------------------------------------------------------------------------- #
+# build_mkvmerge_cmd — exact command shape (mkvmerge 84.0, verified 2026-10-29)
+# --------------------------------------------------------------------------- #
+def _pinfo(**kw):
+    base = {
+        "aud_rm_global": [], "aud_keep_global": None,
+        "sub_rm_global": [], "sub_keep_global": None,
+        "default_target_a": None, "default_target_global": None, "default_others_global": [],
+    }
+    base.update(kw)
+    return base
+
+
+def test_build_cmd_def_only_exact():
+    cmd = avm.build_mkvmerge_cmd(
+        _pinfo(default_target_global=3, default_others_global=[1, 2]),
+        out="/t.mkv", inpath="/s.mkv")
+    assert cmd == [
+        "mkvmerge", "-o", "/t.mkv",
+        "--default-track-flag", "3:true",
+        "--default-track-flag", "1:false",
+        "--default-track-flag", "2:false",
+        "/s.mkv",
+    ]
+
+
+def test_build_cmd_all_subs_drop():
+    cmd = avm.build_mkvmerge_cmd(_pinfo(sub_keep_global=[]), out="/t.mkv", inpath="/s.mkv")
+    assert cmd == ["mkvmerge", "-o", "/t.mkv", "-S", "/s.mkv"]
+
+
+def test_build_cmd_keep_lists_plus_def():
+    cmd = avm.build_mkvmerge_cmd(
+        _pinfo(aud_keep_global=[2, 4], sub_keep_global=[6],
+               default_target_global=2, default_others_global=[4]),
+        out="/t.mkv", inpath="/s.mkv")
+    assert "-a" in cmd and cmd[cmd.index("-a") + 1] == "2,4"
+    assert "-s" in cmd and cmd[cmd.index("-s") + 1] == "6"
+    assert "2:true" in cmd and "4:false" in cmd
+    # nothing that mkvmerge 84.0 rejects:
+    assert "-y" not in cmd
+    assert not any(x.startswith("--no-") for x in cmd)
+
+
 def test_bin_check_missing(monkeypatch):
-    monkeypatch.setattr(avm.shutil, "which", lambda b: None)
-    assert avm.bin_check() == ["ffprobe", "mkvmerge", "mkvpropedit"]
+    monkeypatch.setattr(avm.shutil, "which", lambda n: None)
+    assert avm.bin_check() == ["ffprobe", "mkvmerge"]
 
 
 # --------------------------------------------------------------------------- #
@@ -372,12 +431,17 @@ def test_main_apply_end_to_end_ok(tmp_path, monkeypatch, capsys):
     assert vid.read_bytes() == b"ORIGINALBYTESMUXED"
     assert (media / "Show - S01E01.mkv.orig").read_bytes() == b"ORIGINALBYTES"
     assert not (media / "Show - S01E01.mkv.tmp-fix").exists()
-    # muxer got the right per-type removals: fre audio = a2, fre sub = s2
+    # muxer got the right per-type removals as GLOBAL keep-lists:
+    # fre audio (global 2) + fre sub (global 4) dropped; eng audio 1 + eng sub 3 kept
     mg = [c for c in cmds if c[0] == "mkvmerge"]
-    assert mg and "--no-a:2" in mg[0] and "--no-s:2" in mg[0]
-    # sole-default set on surviving eng audio a1
-    mp = [c for c in cmds if c[0] == "mkvpropedit"]
-    assert mp and "track:a1" in " ".join(mp[0]) and "flag=default" in mp[0]
+    assert len(mg) == 1
+    cmd = mg[0]
+    assert "-a" in cmd and cmd[cmd.index("-a") + 1] == "1"
+    assert "-s" in cmd and cmd[cmd.index("-s") + 1] == "3"
+    # sole default flag set on the surviving eng audio (global 1) — via mkvmerge
+    assert "--default-track-flag" in cmd and "1:true" in cmd
+    assert "-y" not in cmd and not any(x.startswith("--no-") for x in cmd)
+    assert not any(c[0] == "mkvpropedit" for c in cmds)
     # report written
     reports = list(outdir.glob("apply_*.json"))
     assert reports and json.loads(reports[0].read_text())["rc"] == 0

@@ -4,10 +4,24 @@
 Applies the SAME tri-state policy the dry-run runner reports
 (languagePolicy.py: keep / confirmed / ambiguous), for Matroska files only:
 
-  DEF  set the preferred (English) audio track as the SOLE default (mkvpropedit)
-  AUD  remove non-whitelisted audio tracks          (mkvmerge --no-a, stream copy)
-  SUB  remove non-English subtitles, English kept   (mkvmerge --no-s, stream copy)
+  DEF  set the preferred (English) audio track as the SOLE default
+       (mkvmerge --default-track-flag, stream copy — a full re-mux is required;
+       mkvpropedit 84.0 is NOT used: it silently fails or corrupts in that build)
+  AUD  remove non-whitelisted audio tracks          (mkvmerge -a keep-list, stream copy)
+  SUB  remove non-English subtitles, English kept   (mkvmerge -s keep-list, stream copy)
   ALL  remove ALL subtitles — only when 100% confirmed non-English (RISK-1, user-approved)
+       (mkvmerge -S)
+
+mkvmerge syntax note (empirically verified on mkvtoolnix 84.0, 2026-10-29):
+  * there is NO `-y` overwrite flag — `-y` means `--sync TID:d` and BREAKS the run.
+    Overwrite is automatic; we also unlink any stale .tmp-fix before muxing.
+  * there is NO `--no-a:<n>` / `--no-s:<n>` per-track exclusion. Track selection is a
+    POSITIVE keep-list over GLOBAL 0-based track IDs (== ffprobe stream index):
+    `-a 1,2` keeps only those audios, `-A` drops all audios; `-s 3,4` / `-S` for subs.
+  * default flags are set in the SAME mux pass: `--default-track-flag <TID>:true|false`.
+    Convention in the container build: default = flag byte omitted, non-default = explicit 0.
+  * Verification of the default still uses ffprobe `disposition.default`, which this
+    ffprobe (6.1.1) fills correctly for Matroska (checked on muxed outputs).
 
 Safety contract (user rules, 2026-10-28):
   * NEVER modify a file under an excluded foreign-nature category (languagePolicy.is_path_excluded)
@@ -17,7 +31,10 @@ Safety contract (user rules, 2026-10-28):
     the file is skipped instead so the original is never clobbered)
   * Free-space gate: per target dir, free >= 2 * sum(file sizes) + margin
     (backup copy + mkvmerge temp live beside the original)
-  * All edits via stream copy (mkvmerge / mkvpropedit) — never re-encode
+  * All edits via stream copy (mkvmerge) — never re-encode. DEF (default flag)
+    now requires a full stream-copy re-mux (157-class DEF files are rewritten
+    once, ~file size of extra disk, a few minutes per 4 GB file) because the
+    mkvpropedit 84.0 build in the container cannot set flags reliably.
   * Write to <file>.tmp-fix, verify with ffprobe (video count, audio/subtitle set, default flag),
     then atomic os.replace onto the original
   * Any verification failure -> auto-restore from .orig and STOP the batch (exit 2)
@@ -89,7 +106,11 @@ def plan_file(item: dict, sub_wl: str, audio_wl: str, default_lang: str) -> dict
         "actions": [],                 # subset of DEF / AUD / SUB / ALL
         "aud_to_remove_a": sorted({aud[a["index"]] for a in c["aud_to_remove"] if a.get("index") in aud}),
         "sub_to_remove_s": sorted({sub[s["index"]] for s in c.get("sub_to_remove", []) if (s.get("index") is not None and s.get("index") in sub)}),
+        # global 0-based stream indices (ffprobe index / mkvmerge track IDs):
+        "aud_rm_global": sorted({a["index"] for a in c["aud_to_remove"] if a.get("index") is not None}),
+        "sub_rm_global": sorted({s["index"] for s in c.get("sub_to_remove", []) if s.get("index") is not None}),
         "default_target_a": None,
+        "default_target_global": None,
         "sub_state": c["sub_state"],
         "aud_state": c["aud_state"],
         "skip": None,
@@ -110,14 +131,15 @@ def plan_file(item: dict, sub_wl: str, audio_wl: str, default_lang: str) -> dict
 
     # --- audio removal (classifier already enforces: no ambiguous, >=1 kept, never last) ---
     aud_remove = pinfo["aud_to_remove_a"]
+    audio_streams = item.get("audio_streams") or []
     if aud_remove:
         pinfo["actions"].append("AUD: remove audio " + ",".join(str(i) for i in aud_remove))
         # the default must land on a surviving track; express in POST-removal numbering
-        survivors = [i for i in range(1, len(item["audio_streams"]) + 1) if i not in set(aud_remove)]
+        survivors = [i for i in range(1, len(audio_streams) + 1) if i not in set(aud_remove)]
         g_target = None
-        for g in range(1, len(item["audio_streams"]) + 1):
+        for g in range(1, len(audio_streams) + 1):
             if g not in set(aud_remove) and lp.matches_whitelist(
-                item["audio_streams"][g - 1].get("language"), default_lang
+                audio_streams[g - 1].get("language"), default_lang
             ):
                 g_target = g
                 break
@@ -127,8 +149,7 @@ def plan_file(item: dict, sub_wl: str, audio_wl: str, default_lang: str) -> dict
             pinfo["aud_to_remove_a"] = []
             return pinfo
         pinfo["default_target_a"] = survivors.index(g_target) + 1
-
-    # --- subtitle removal ---
+    # subtitle removal
     if c["sub_state"] == "remove_confirmed":
         assert pinfo["sub_to_remove_s"], "no subtitle indices to remove"
         pinfo["actions"].append("SUB: remove subtitles " + ",".join(str(i) for i in pinfo["sub_to_remove_s"]) + " (keep English)")
@@ -140,6 +161,20 @@ def plan_file(item: dict, sub_wl: str, audio_wl: str, default_lang: str) -> dict
         pinfo["sub_to_remove_s"] = all_s
         pinfo["actions"].append("ALL: remove ALL subtitles (100% confirmed non-English, RISK-1 approved)")
 
+    # --- global track IDs (0-based, == ffprobe stream index == mkvmerge track ID) ---
+    aud_rm = set(aud_remove)
+    pinfo["aud_rm_global"] = sorted(audio_streams[i - 1]["index"] for i in aud_rm if audio_streams[i - 1].get("index") is not None)
+    pinfo["aud_keep_global"] = sorted(
+        a["index"] for i, a in enumerate(audio_streams, 1)
+        if i not in aud_rm and a.get("index") is not None
+    ) if aud_rm else None  # None = "keep all audio" (no -a needed)
+    sub_rm = set(pinfo["sub_to_remove_s"])
+    sub_keep_global = [
+        s["index"] for i, s in enumerate(item.get("subtitle_streams") or [], 1)
+        if i not in sub_rm and s.get("index") is not None
+    ] if sub_rm else None
+    pinfo["sub_keep_global"] = sub_keep_global  # [] => drop ALL (-S); None => no sub action
+
     # --- default audio reorder (only when we are not already removing audio) ---
     if not pinfo["actions"] or "AUD" not in " ".join(pinfo["actions"]):
         if c["default_audio_fixable"]:
@@ -150,6 +185,26 @@ def plan_file(item: dict, sub_wl: str, audio_wl: str, default_lang: str) -> dict
             else:
                 pinfo["skip"] = "preferred audio not found"
                 return pinfo
+
+    # --- default audio: express the target as a GLOBAL track ID (mkvmerge --default-track-flag) ---
+    if pinfo["default_target_a"] is not None:
+        # position is 1-based probe-order; map to that stream's global index
+        n_aud = len(audio_streams)
+        if aud_rm:
+            # position among survivors -> find surviving stream at that position
+            surv = [i for i in range(1, n_aud + 1) if i not in aud_rm]
+            stream_pos = surv[pinfo["default_target_a"] - 1]
+        else:
+            stream_pos = pinfo["default_target_a"]
+        tgt = audio_streams[stream_pos - 1].get("index")
+        pinfo["default_target_global"] = tgt
+        # only tracks that SURVIVE need (can have) flags — dropped tracks are excluded
+        kept = set(pinfo.get("aud_keep_global")) if pinfo.get("aud_keep_global") is not None else \
+            {s["index"] for s in audio_streams if s.get("index") is not None}
+        pinfo["default_others_global"] = [
+            s["index"] for s in audio_streams
+            if s.get("index") is not None and s["index"] in kept and s["index"] != tgt
+        ]
 
     if not pinfo["actions"]:
         pinfo["skip"] = "no action needed"
@@ -247,6 +302,39 @@ def pstat_size(p: str) -> int:
         return 0
 
 
+def build_mkvmerge_cmd(pinfo: dict, out: str, inpath: str) -> list:
+    """Construct the mkvmerge stream-copy command for one planned file.
+
+    Pure function (no filesystem/subprocess) so the EXACT command can be unit
+    tested against the empirically verified mkvmerge 84.0 syntax:
+      * no `-y` (it means `--sync TID:d` and aborts the run)
+      * positive keep-lists over GLOBAL 0-based track IDs: `-a 1,2` / `-s 3,4`
+      * `-S` drops all subtitles (the "ALL" class); there is no per-track `--no-s:`
+      * default flags in the same pass: `--default-track-flag <TID>:true|false`
+    """
+    cmd = ["mkvmerge", "-o", out]
+    # audio: classifier guarantees at least one audio always survives, so a
+    # non-empty keep-list is always available whenever audio was removed
+    keep_a = pinfo.get("aud_keep_global")
+    if keep_a:
+        cmd += ["-a", ",".join(str(i) for i in keep_a)]
+    # subtitles: None = no subtitle action; [] = drop ALL (-S); [ids] = keep-list
+    sub_keep = pinfo.get("sub_keep_global")
+    if sub_keep is not None:
+        if sub_keep:
+            cmd += ["-s", ",".join(str(i) for i in sub_keep)]
+        else:
+            cmd += ["-S"]
+    # default audio: target true, every other surviving audio explicitly false
+    tgt = pinfo.get("default_target_global")
+    if tgt is not None:
+        cmd += ["--default-track-flag", "%d:true" % tgt]
+        for g in pinfo.get("default_others_global") or []:
+            cmd += ["--default-track-flag", "%d:false" % g]
+    cmd.append(inpath)
+    return cmd
+
+
 def apply_file(pinfo: dict, item: dict, probe_timeout: float, backup: bool = True) -> dict:
     """Apply one planned file. Returns a result dict (never raises)."""
     src = Path(pinfo["path"])
@@ -266,43 +354,25 @@ def apply_file(pinfo: dict, item: dict, probe_timeout: float, backup: bool = Tru
                 return res
         else:
             bak = None  # --no-backup
-        # 2) mux removals (if any)
-        needs_mux = bool(pinfo["aud_to_remove_a"] or pinfo["sub_to_remove_s"])
+        # 2) mux — track removal and/or the default flag, one stream-copy pass
+        #    (mkvmerge 84.0; verified syntax in the module docstring)
+        needs_mux = bool(
+            pinfo.get("aud_rm_global")
+            or pinfo.get("sub_rm_global")
+            or pinfo.get("default_target_global") is not None
+        )
         if needs_mux:
-            cmd = ["mkvmerge", "-y", "-o", str(tmp)]
-            for i in pinfo["aud_to_remove_a"]:
-                cmd += ["--no-a:%d" % i]
-            for i in pinfo["sub_to_remove_s"]:
-                cmd += ["--no-s:%d" % i]
-            cmd.append(str(src))
+            if tmp.exists():
+                tmp.unlink()  # never feed a stale/partial output file to the muxer
+            cmd = build_mkvmerge_cmd(pinfo, out=str(tmp), inpath=str(src))
             _run(cmd, res)
             if res["status"] != "ok":
                 _restore(src, bak, tmp)
                 return res
-        # 3) default audio flag
-        if pinfo["default_target_a"] is not None:
-            out = str(tmp) if needs_mux else str(src)
-            target_idx = pinfo["default_target_a"]
-            n_aud_total = len(item.get("audio_streams") or [])
-            mp = ["mkvpropedit", out]
-            # post-mux numbering: surviving audio tracks in probe order, renumbered 1..k
-            if needs_mux:
-                removed = set(pinfo["aud_to_remove_a"])
-                # target was expressed post-removal; to unset all others we need post-removal set:
-                survivors_post = [i for i in range(1, n_aud_total + 1) if i not in removed]
-                others = [i for i in survivors_post if i != target_idx]
-            else:
-                others = [i for i in range(1, n_aud_total + 1) if i != target_idx]
-            mp += ["--edit", "track:a%d" % target_idx, "--set", "flag=default"]
-            for i in others:
-                mp += ["--edit", "track:a%d" % i, "--unset", "flag=default"]
-            _run(mp, res)
-            if res["status"] != "ok":
-                _restore(src, bak, tmp)
-                return res
-        # 4) verify
+        # 3) verify
         expected = expected_state_after(pinfo, item)
-        ok, why, st = verify_file(Path(out if needs_mux else str(src)), expected, -1, probe_timeout)
+        target_file = Path(str(tmp)) if needs_mux else Path(str(src))
+        ok, why, st = verify_file(target_file, expected, -1, probe_timeout)
         if not ok:
             res.update(status="failed_verify", detail=why)
             _restore(src, bak, tmp)
@@ -341,7 +411,7 @@ def _restore(src: Path, bak: Path | None, tmp: Path) -> None:
 
 
 def bin_check() -> list[str]:
-    missing = [b for b in ("ffprobe", "mkvmerge", "mkvpropedit") if not shutil.which(b)]
+    missing = [b for b in ("ffprobe", "mkvmerge") if not shutil.which(b)]
     return missing
 
 
