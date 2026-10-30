@@ -44,15 +44,26 @@ Safety contract (user rules, 2026-10-28):
     mkvpropedit 84.0 build in the container cannot set flags reliably.
   * Write to <file>.tmp-fix, verify with ffprobe (video count, audio/subtitle set, default flag),
     then atomic os.replace onto the original
-  * Any verification failure -> auto-restore from .orig and STOP the batch (exit 2)
+  * Any verification failure -> auto-restore from .orig; the failure is counted
+    and the batch CONTINUES until a failure threshold trips (see below)
 
 Modes:
   default        DRY-RUN: prints the per-file plan + commands, no changes (exit 0)
   --apply        performs the work (requires the dry-run plan to look right)
 
-Exit codes: 0 = done (dry-run or all applied/skipped); 1 = partial (some files failed,
-no restore occurred, batch continued); 2 = verification failure -> restored, batch stopped;
+Exit codes: 0 = done (dry-run or all applied); 1 = run finished but some files
+failed/skipped (each failed file's original was restored before continuing);
+2 = batch STOPPED EARLY because a failure threshold was reached, or a
+verification failure occurred — investigate before re-running;
 3 = environment/config error (missing binaries, unreadable root, scan error).
+
+Failure thresholds (--max-consecutive-failures default 5, --max-total-failures
+default 20; 0 = unlimited): a per-file failure is LOGGED AND CONTINUED (the
+original is always restored / the temp cleaned before moving on), so a single
+corrupt file cannot stall a whole drive. But back-to-back or numerous failures
+usually mean a systemic problem (wedged CIFS mount, out of space, wrong
+policy), so when a threshold trips the remaining files are left untouched and
+the run exits 2.
 """
 from __future__ import annotations
 
@@ -483,6 +494,10 @@ def main():
     ap.add_argument("--apply", action="store_true", help="PERFORM the fixes (default is dry-run: plan only)")
     ap.add_argument("--no-backup", action="store_false", dest="backup", default=True,
                     help="skip .orig backups (DANGEROUS; not recommended)")
+    ap.add_argument("--max-consecutive-failures", type=int, default=5,
+                    help="stop the run after this many back-to-back file failures (default 5; 0 = unlimited)")
+    ap.add_argument("--max-total-failures", type=int, default=20,
+                    help="stop the run after this many file failures in total (default 20; 0 = unlimited)")
     args = ap.parse_args()
 
     missing = bin_check()
@@ -581,37 +596,66 @@ def main():
         return 0
 
     # ---- APPLY ----
+    max_consec = max(0, args.max_consecutive_failures)
+    max_total = max(0, args.max_total_failures)
     print("APPLY: executing %d file(s)..." % len(actionable))
+    print("limits:  max-consecutive-failures=%s  max-total-failures=%s (0 = unlimited)" % (
+        max_consec or "unlimited", max_total or "unlimited"))
     results = []
-    stop = False
+    consec_fail = 0
+    total_fail = 0
+    threshold_hit = False
     for i, p in enumerate(sorted(actionable, key=lambda x: x["path"]), 1):
         print("[%d/%d] %s" % (i, len(actionable), p["path"]))
-        if not args.backup:
-            pass  # user explicitly disabled backups; _restore no-ops without a .orig
         it = next(x for x in items if x["path"] == p["path"])
         res = apply_file(p, it, args.probe_timeout, backup=args.backup)
         results.append(res)
         tag = res["status"].upper().ljust(20)
         print("    -> %s %s" % (tag, res.get("detail", "")))
-        if res["status"] in ("failed_verify",):
-            print("    RESTORED from backup; STOPPING batch (see exit code 2).", file=sys.stderr)
-            stop = True
-            break
+        if res["status"].startswith("failed_"):
+            # A per-file failure never destroys the original (apply_file restores
+            # the .orig and/or cleans the temp before returning), so log-and-
+            # continue is safe. We only stop when the FAILURE PATTERN suggests a
+            # systemic problem (wedged mount, out of space, wrong policy) rather
+            # than one bad file.
+            consec_fail += 1
+            total_fail += 1
+            print("    failures so far: consecutive=%d total=%d" % (consec_fail, total_fail))
+            if (max_consec and consec_fail >= max_consec) or (max_total and total_fail >= max_total):
+                threshold_hit = True
+                print("THRESHOLD REACHED: stopping early — consecutive=%s/%s total=%s/%s. "
+                      "Remaining %d file(s) left untouched. Investigate before re-running (exit 2)."
+                      % (consec_fail, max_consec or "*", total_fail, max_total or "*",
+                         len(actionable) - i), file=sys.stderr)
+                break
+        else:
+            consec_fail = 0  # success re-arms the consecutive counter
 
     rc = 0
-    if any(r["status"] == "failed_verify" for r in results):
+    if threshold_hit or any(r["status"] == "failed_verify" for r in results):
         rc = 2
-    elif any(r["status"].startswith(("failed", "skipped")) for r in results):
+    elif any(r["status"].startswith(("failed_", "skipped_")) for r in results):
         rc = 1
 
     summary = {
         "mode": "apply", "generated_utc": rv.now_utc(), "root": args.root,
-        "config": {"sub": args.subtitle_whitelist, "aud": args.audio_whitelist, "default": args.default_audio_language},
+        "config": {
+            "sub": args.subtitle_whitelist, "aud": args.audio_whitelist,
+            "default": args.default_audio_language,
+            "max_consecutive_failures": max_consec, "max_total_failures": max_total,
+        },
+        "threshold": {
+            "hit": threshold_hit,
+            "consecutive_failures": consec_fail,
+            "total_failures": total_fail,
+            "files_left_untouched": max(0, len(actionable) - len(results)),
+        },
         "results": results, "rc": rc,
-        "run_summary": "applyVideoMetadata apply | files=%d ok=%d failed=%d rc=%d" % (
+        "run_summary": "applyVideoMetadata apply | files=%d ok=%d failed=%d stopped_early=%s rc=%d" % (
             len(results),
             sum(1 for r in results if r["status"] == "ok"),
             sum(1 for r in results if r["status"] != "ok"),
+            threshold_hit,
             rc,
         ),
     }

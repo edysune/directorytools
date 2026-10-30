@@ -543,3 +543,124 @@ def test_main_apply_end_to_end_failure_restores(tmp_path, monkeypatch):
     assert not (media / "Show - S01E01.mkv.tmp-fix").exists()
     reports = list(outdir.glob("apply_*.json"))
     assert reports and json.loads(reports[0].read_text())["rc"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# Failure thresholds (user policy 2026-10-30): log-and-continue; stop at
+# 5 back-to-back OR 20 total failures (both tunable, 0 = unlimited). A single
+# corrupt file must never stall a whole drive, but a failure STRING suggests a
+# systemic problem (wedged CIFS mount, out of space, wrong policy).
+# --------------------------------------------------------------------------- #
+def _mk_n_files(media: Path, n: int):
+    media.mkdir(parents=True, exist_ok=True)
+    files = []
+    for i in range(1, n + 1):
+        f = media / ("Show - S01E%02d.mkv" % i)
+        f.write_bytes(b"ORIGINALBYTES")
+        files.append(f)
+    return files
+
+
+def _stub_apply(monkeypatch, statuses):
+    """Hand avm.apply_file a scripted status per file; return the call list."""
+    calls = []
+    seq = list(statuses)
+
+    def fake_apply(pinfo, item, probe_timeout, backup=True):
+        calls.append(pinfo["path"])
+        return {"path": pinfo["path"], "status": seq.pop(0),
+                "detail": "stub", "actions": []}
+
+    monkeypatch.setattr(avm, "apply_file", fake_apply)
+    return calls
+
+
+def _report(outdir):
+    return json.loads(list(outdir.glob("apply_*.json"))[0].read_text())
+
+
+def test_threshold_single_failure_continues(tmp_path, monkeypatch):
+    _mk_n_files(tmp_path / "media" / "Show", 3)
+    _fake_tools(monkeypatch, fail_mkvmerge=False)
+    calls = _stub_apply(monkeypatch, ["failed_cmd", "ok", "ok"])
+    monkeypatch.setattr("sys.argv", _main_argv(tmp_path / "media", tmp_path / "out"))
+    rc = avm.main()
+    assert len(calls) == 3                      # first failure did NOT stop the batch
+    assert rc == 1                              # non-verify failure, run finished
+    assert _report(tmp_path / "out")["threshold"]["hit"] is False
+
+
+def test_verify_failure_counts_and_continues(tmp_path, monkeypatch):
+    _mk_n_files(tmp_path / "media" / "Show", 3)
+    _fake_tools(monkeypatch, fail_mkvmerge=False)
+    calls = _stub_apply(monkeypatch, ["failed_verify", "ok", "ok"])
+    monkeypatch.setattr("sys.argv", _main_argv(tmp_path / "media", tmp_path / "out"))
+    rc = avm.main()
+    assert len(calls) == 3                      # old code would have stopped after file 1
+    assert rc == 2                              # verify failures stay an "investigate" signal
+
+
+def test_consecutive_threshold_default_stops_at_five(tmp_path, monkeypatch):
+    files = _mk_n_files(tmp_path / "media" / "Show", 8)
+    _fake_tools(monkeypatch, fail_mkvmerge=False)
+    calls = _stub_apply(monkeypatch, ["failed_cmd"] * 8)
+    monkeypatch.setattr("sys.argv", _main_argv(tmp_path / "media", tmp_path / "out"))
+    rc = avm.main()
+    assert len(calls) == 5                      # default consecutive limit = 5
+    assert rc == 2
+    rep = _report(tmp_path / "out")
+    assert rep["threshold"]["hit"] is True
+    assert rep["threshold"]["files_left_untouched"] == 3
+    # untouched files must be pristine: no temp, no backup residue
+    for f in files[5:]:
+        assert f.read_bytes() == b"ORIGINALBYTES"
+        assert not (f.parent / (f.name + ".orig")).exists()
+        assert not (f.parent / (f.name + ".tmp-fix")).exists()
+
+
+def test_consecutive_counter_resets_on_success(tmp_path, monkeypatch):
+    _mk_n_files(tmp_path / "media" / "Show", 6)
+    _fake_tools(monkeypatch, fail_mkvmerge=False)
+    calls = _stub_apply(monkeypatch, ["failed_cmd", "ok", "failed_cmd", "ok",
+                                      "failed_cmd", "ok"])
+    extra = ("--max-consecutive-failures", "2")
+    monkeypatch.setattr("sys.argv", _main_argv(tmp_path / "media", tmp_path / "out", extra))
+    rc = avm.main()
+    assert len(calls) == 6                      # never two back-to-back -> never stopped
+    assert rc == 1
+
+
+def test_total_threshold_counts_across_successes(tmp_path, monkeypatch):
+    _mk_n_files(tmp_path / "media" / "Show", 25)
+    _fake_tools(monkeypatch, fail_mkvmerge=False)
+    statuses = ["failed_cmd", "ok"] * 12 + ["failed_cmd"]     # 13 failures
+    calls = _stub_apply(monkeypatch, statuses)
+    extra = ("--max-consecutive-failures", "0", "--max-total-failures", "10")
+    monkeypatch.setattr("sys.argv", _main_argv(tmp_path / "media", tmp_path / "out", extra))
+    rc = avm.main()
+    assert len(calls) == 19                     # stopped exactly at the 10th failure
+    assert rc == 2
+    rep = _report(tmp_path / "out")
+    assert rep["threshold"]["total_failures"] == 10
+    assert rep["threshold"]["files_left_untouched"] == 6
+
+
+def test_zero_disables_thresholds(tmp_path, monkeypatch):
+    _mk_n_files(tmp_path / "media" / "Show", 6)
+    _fake_tools(monkeypatch, fail_mkvmerge=False)
+    calls = _stub_apply(monkeypatch, ["failed_cmd"] * 6)
+    extra = ("--max-consecutive-failures", "0", "--max-total-failures", "0")
+    monkeypatch.setattr("sys.argv", _main_argv(tmp_path / "media", tmp_path / "out", extra))
+    rc = avm.main()
+    assert len(calls) == 6                      # unlimited: everything attempted
+    assert rc == 1
+
+
+def test_skip_status_does_not_count_as_failure(tmp_path, monkeypatch):
+    _mk_n_files(tmp_path / "media" / "Show", 7)
+    _fake_tools(monkeypatch, fail_mkvmerge=False)
+    calls = _stub_apply(monkeypatch, ["skipped_backup_conflict"] * 7)
+    monkeypatch.setattr("sys.argv", _main_argv(tmp_path / "media", tmp_path / "out"))
+    rc = avm.main()
+    assert len(calls) == 7                      # skips never trip the thresholds
+    assert rc == 1                              # but a skip still marks the run "not clean"
