@@ -1,0 +1,15 @@
+{
+  "last_directory": "/mnt/A14002/plex",
+  "keep_original_files": false,
+  "delete_previous_output_auto": true,
+  "subtitle_whitelist": "English",
+  "allowed_subtitle_types": "SRT, ASS, SSA, SUB, SBV, JSON",
+  "default_audio_language": "English",
+  "audio_whitelist": "English, Japanese, Korean",
+  "attempt_identify_unknown_audio": false,
+  "ignore_directories": "/mnt/A14000/plex/movies/Apocalypto (2006)\n/mnt/A14000/plex/backup\n/mnt/A16000/plex/foreign_tv_shows\n/mnt/A16000/plex/foreign_movies\n/mnt/A18000/books\n/mnt/A18000/nextcloud\n/mnt/A18001/emulator\n/mnt/A18001/audio\n/mnt/A18002/emulator\n/mnt/A18002/youtube\n/mnt/A22000/cloud_saves\n/mnt/A22000/gamevault\n/mnt/A22000/nextcloud\n/mnt/A22000/public_gamevault\n/mnt/A22000/temp\n/mnt/A26000\n/mnt/A26001/stash\n/mnt/A26001/plex/upscale_demos\n/mnt/A26001/plex/learning_videos",
+  "warnings_print_default_audio": false,
+  "warnings_print_preferred_audio": false,
+  "warnings_print_preferred_subtitles": false,
+  "last_updated": "2026-10-26T14:30:28.473111"
+}
