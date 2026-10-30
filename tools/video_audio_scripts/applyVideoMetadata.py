@@ -20,6 +20,13 @@ mkvmerge syntax note (empirically verified on mkvtoolnix 84.0, 2026-10-29):
     `-a 1,2` keeps only those audios, `-A` drops all audios; `-s 3,4` / `-S` for subs.
   * default flags are set in the SAME mux pass: `--default-track-flag <TID>:true|false`.
     Convention in the container build: default = flag byte omitted, non-default = explicit 0.
+  * Language restatement: mkvmerge 84.0 has been observed DROPPING the language tag of
+    some subtitle tracks on re-mux (2026-10-30, Back Arrow S01E17: the 'Signs@EMBER'
+    signs sub lost its 'eng' label; verifier caught it -> restored). Every kept track's
+    known language is therefore re-asserted with `--language <TID>:<code>` in the same
+    pass so the post-mux state matches the scan state. Tracks whose recorded language
+    is not a clean code (labels, title fallbacks like 'Signs@EMBER') are NOT asserted —
+    an invalid code would abort the mux (and re-asserting a wrong label would be wrong).
   * Verification of the default still uses ffprobe `disposition.default`, which this
     ffprobe (6.1.1) fills correctly for Matroska (checked on muxed outputs).
 
@@ -52,6 +59,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -65,6 +73,11 @@ import runVideoMetadata as rv  # classify() + analyze_file() — single probe/cl
 BACKUP_SUFFIX = ".orig"
 TMP_SUFFIX = ".tmp-fix"
 MARGIN_GIB_DEFAULT = 2.0
+
+# A restat-able track language: ISO 639-1/2 (2-3 letters) with an optional
+# BCP-47 subtag (region/script), e.g. 'eng', 'en-us', 'zh-hans'. Deliberately
+# strict: anything else ('Signs@EMBER', 'und', labels) is NOT asserted back.
+_LANG_CODE_RE = re.compile(r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?$")
 
 
 # --------------------------------------------------------------------------- #
@@ -175,6 +188,17 @@ def plan_file(item: dict, sub_wl: str, audio_wl: str, default_lang: str) -> dict
     ] if sub_rm else None
     pinfo["sub_keep_global"] = sub_keep_global  # [] => drop ALL (-S); None => no sub action
 
+    # --- language restatement: re-assert every KEPT track's known language so a
+    #     re-mux cannot silently drop one (mkvmerge 84.0 quirk, Back Arrow S01E17).
+    #     Kept-set semantics mirror build_mkvmerge_cmd: None = no removal (all kept).
+    keep_a = pinfo.get("aud_keep_global")
+    keep_a_ids = {i for i in keep_a} if keep_a is not None else \
+        {a["index"] for a in item.get("audio_streams") or [] if a.get("index") is not None}
+    keep_s = pinfo.get("sub_keep_global")
+    keep_s_ids = {i for i in keep_s} if keep_s is not None else \
+        {s["index"] for s in item.get("subtitle_streams") or [] if s.get("index") is not None}
+    pinfo["track_langs"] = _restated_track_langs(item, keep_a_ids, keep_s_ids)
+
     # --- default audio reorder (only when we are not already removing audio) ---
     if not pinfo["actions"] or "AUD" not in " ".join(pinfo["actions"]):
         if c["default_audio_fixable"]:
@@ -217,6 +241,25 @@ def _global_a_target(audio_list: list, default_lang: str) -> int | None:
         if lp.matches_whitelist(a.get("language"), default_lang):
             return i
     return None
+
+
+def _restated_track_langs(item: dict, keep_a_ids: set, keep_s_ids: set) -> dict:
+    """Map global track id -> language code for every kept track with a clean code.
+
+    Used to re-assert languages inside the mkvmerge pass (some subtitle tracks lose
+    their language tag on re-mux — see module docstring). Non-code values (labels,
+    title fallbacks, empties) are skipped: asserting them would abort the mux.
+    """
+    out: dict[int, str] = {}
+    for s in item.get("audio_streams") or []:
+        i, code = s.get("index"), s.get("language")
+        if i is not None and i in keep_a_ids and _LANG_CODE_RE.fullmatch(code or ""):
+            out[int(i)] = code.lower()
+    for s in item.get("subtitle_streams") or []:
+        i, code = s.get("index"), s.get("language")
+        if i is not None and i in keep_s_ids and _LANG_CODE_RE.fullmatch(code or ""):
+            out[int(i)] = code.lower()
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -311,6 +354,7 @@ def build_mkvmerge_cmd(pinfo: dict, out: str, inpath: str) -> list:
       * positive keep-lists over GLOBAL 0-based track IDs: `-a 1,2` / `-s 3,4`
       * `-S` drops all subtitles (the "ALL" class); there is no per-track `--no-s:`
       * default flags in the same pass: `--default-track-flag <TID>:true|false`
+      * language restatement (kept tracks with clean codes): `--language <TID>:<code>`
     """
     cmd = ["mkvmerge", "-o", out]
     # audio: classifier guarantees at least one audio always survives, so a
@@ -325,6 +369,11 @@ def build_mkvmerge_cmd(pinfo: dict, out: str, inpath: str) -> list:
             cmd += ["-s", ",".join(str(i) for i in sub_keep)]
         else:
             cmd += ["-S"]
+    # language restatement: keeps a re-mux from dropping a track's language tag
+    # (observed on mkvmerge 84.0; Back Arrow S01E17 signs sub, 2026-10-30)
+    track_langs = pinfo.get("track_langs") or {}
+    for tid in sorted(track_langs):
+        cmd += ["--language", "%d:%s" % (tid, track_langs[tid])]
     # default audio: target true, every other surviving audio explicitly false
     tgt = pinfo.get("default_target_global")
     if tgt is not None:

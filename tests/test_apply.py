@@ -334,6 +334,84 @@ def test_build_cmd_keep_lists_plus_def():
     assert not any(x.startswith("--no-") for x in cmd)
 
 
+def test_build_cmd_includes_track_langs():
+    # mkvmerge 84.0 can drop/alter language metadata on re-mux (observed 2026-10-30
+    # on Back Arrow S01E17: signs sub lost its 'eng' label). The engine must
+    # re-assert every kept track's known language so post == scan state.
+    cmd = avm.build_mkvmerge_cmd(
+        _pinfo(default_target_global=2, default_others_global=[1],
+               track_langs={1: "eng", 2: "jpn", 3: "eng"}),
+        out="/t.mkv", inpath="/s.mkv")
+    assert cmd == [
+        "mkvmerge", "-o", "/t.mkv",
+        "--language", "1:eng",
+        "--language", "2:jpn",
+        "--language", "3:eng",
+        "--default-track-flag", "2:true",
+        "--default-track-flag", "1:false",
+        "/s.mkv",
+    ]
+
+
+def test_build_cmd_no_langs_without_track_langs():
+    # backward-compatible: pinfo without track_langs -> exactly the old command
+    cmd = avm.build_mkvmerge_cmd(
+        _pinfo(default_target_global=3, default_others_global=[1, 2]),
+        out="/t.mkv", inpath="/s.mkv")
+    assert "--language" not in cmd
+    assert "--lang" not in cmd
+
+
+def test_plan_file_track_langs_full_keep(tmp_path):
+    # Back Arrow S01E17 shape: eng+jpn audio (BOTH default — DEF target),
+    # two eng subs. DEF-only: nothing removed, every kept track gets its
+    # language re-asserted.
+    p = tmp_path / "e17.mkv"
+    p.write_bytes(b"0" * 100)
+    item = make_item(p, [("eng", True), ("jpn", True)], ["eng", "eng"])
+    pl = avm.plan_file(item, "English", "English, Japanese, Korean", "English")
+    assert any(a.startswith("DEF") for a in pl["actions"])
+    assert pl["aud_to_remove_a"] == [] and pl["sub_to_remove_s"] == []
+    assert pl["track_langs"] == {1: "eng", 2: "jpn", 3: "eng", 4: "eng"}
+
+
+def test_plan_file_track_langs_excludes_removed(tmp_path):
+    # fre audio + jpn sub removed (confirmed non-English) -> their ids must be
+    # ABSENT from the restated languages (they won't exist in the output).
+    p = tmp_path / "mix.mkv"
+    p.write_bytes(b"0" * 100)
+    item = make_item(p, [("eng", False), ("fre", True)], ["eng", "jpn"])
+    pl = avm.plan_file(item, "English", "English", "English")
+    assert pl["aud_to_remove_a"] and pl["sub_to_remove_s"]
+    assert 2 not in pl["track_langs"]   # fre audio (global 2) removed
+    assert 4 not in pl["track_langs"]   # jpn sub (global 4) removed
+    assert pl["track_langs"][1] == "eng"
+    assert pl["track_langs"][3] == "eng"
+
+
+def test_plan_file_track_langs_skips_non_code(tmp_path):
+    # A track whose recorded "language" is a label (e.g. title fallback
+    # 'Signs@EMBER') must NOT be re-asserted — an invalid code would abort
+    # the mux. Clean-coded tracks keep being restated (eng audio + eng sub).
+    p = tmp_path / "signs.mkv"
+    p.write_bytes(b"0" * 100)
+    item = make_item(p, [("eng", True)], ["Signs@EMBER", "eng"])
+    pl = avm.plan_file(item, "English", "English", "English")
+    assert 2 not in pl["track_langs"]          # 'Signs@EMBER' label (global 2): not asserted
+    assert pl["track_langs"] == {1: "eng", 3: "eng"}
+
+
+def test_plan_file_track_langs_all_subs_kept_audio_only(tmp_path):
+    # ALL (drop every sub): only surviving audio languages are restated.
+    p = tmp_path / "all.mkv"
+    p.write_bytes(b"0" * 100)
+    item = make_item(p, [("eng", True)], ["jpn"])
+    pl = avm.plan_file(item, "English", "English, Japanese, Korean", "English")
+    assert any(a.startswith("ALL") for a in pl["actions"])
+    assert pl["sub_keep_global"] == []
+    assert pl["track_langs"] == {1: "eng"}
+
+
 def test_bin_check_missing(monkeypatch):
     monkeypatch.setattr(avm.shutil, "which", lambda n: None)
     assert avm.bin_check() == ["ffprobe", "mkvmerge"]
