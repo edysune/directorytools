@@ -1,0 +1,32 @@
+# Pinned tooling image for tools/video_audio_scripts (scan/analyze/fix/runner).
+#
+# Why: host ubu.hdocker.int (10.0.0.233) has no ffmpeg/ffprobe/mkvtoolnix.
+# All video work runs inside this image; the host stays unchanged (reversible:
+# `docker rmi directorytools-tooling:py312-ffmpeg`).
+#
+# Build (from the repo directory, on .233):
+#   docker build -t directorytools-tooling:py312-ffmpeg \
+#                -f tools/video_audio_scripts/Dockerfile.tooling tools/video_audio_scripts/
+# (or any build context that contains this file)
+#
+# Run — read-only baseline (Phase 1, dry-run; nothing is modified):
+#   docker run --rm \
+#     -v /path/to/media_root:/media:ro \
+#     -v /path/to/repo:/repo:ro \
+#     -v /scratch/work:/work \
+#     -w /repo/tools/video_audio_scripts \
+#     directorytools-tooling:py312-ffmpeg \
+#     python3 runVideoMetadata.py /media \
+#       --subtitle-whitelist English \
+#       --audio-whitelist "English, Japanese, Korean" \
+#       --default-audio-language English \
+#       --ignore /media/emulator --ignore /media/youtube \
+#       --output-dir /work
+#
+# The LAST stdout line is a JSON run-summary ({job, mode, status, scanned,
+# issues{...}, warnings, critical, data_loss_risk, duration_s}); exit codes
+# are 0 ok / 1 partial / 2 failed / 3 aborted-critical.
+
+FROM alpine:3.20
+RUN apk add --no-cache python3 ffmpeg mkvtoolnix ca-certificates
+WORKDIR /work
