@@ -1,0 +1,49 @@
+# =====================================================================
+#  dedup_cleaner — paste-ready compose service
+#
+#  This is a SNIPPET. Do NOT replace the remote /docker/docker-compose.yml.
+#  1) On ubuks.hdocker.int:  cp /docker/docker-compose.yml{,.bak-$(date +%Y%m%d%H%M%S)}
+#  2) Append the services block below (top-level `services:` if absent).
+#  3) Put the real DEDUP_* values (incl. the real NAS root + Fernet key) in a
+#     git-ignored .env on the box -- the container never sees them in code.
+#  4) docker compose config  ->  docker compose up -d --no-restart --build dedup_cleaner
+#
+#  Scheduling (Monday night cron) is on the host, e.g. /etc/cron.d/dedup:
+#     15 2 * * 1  root  cd /docker && docker compose run --rm --no-deps dedup_cleaner
+# =====================================================================
+services:
+  dedup_cleaner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: dedup_cleaner:0.1.0
+    container_name: dedup_cleaner
+    # One-shot job; the host cron triggers `docker compose run` (see header).
+    restart: "no"
+    init: true
+
+    # Pulls every DEDUP_* key (root, preferred, ignore, key, state dir, flags).
+    env_file:
+      - /docker/.env            # git-ignored; holds the REAL values
+
+    # Safety defaults even if the .env forgets them:
+    environment:
+      DEDUP_DRY_RUN: "true"
+      DEDUP_ALLOW_DELETE: "false"
+
+    volumes:
+      # The scanned tree: ${DEDUP_ROOT} (your host path, from .env) is
+      # mounted at /data. :rw so deletion *can* work later; use :ro during
+      # the dry-run review phase for extra safety.
+      - ${DEDUP_ROOT}:/data:rw
+      # Encrypted state CSV persists here between runs (named volume default):
+      - dedup_state:/volume/dedup/state
+
+    # The actual flags. Everything else rides on the env vars above.
+    command:
+      - --root
+      - /data
+
+volumes:
+  dedup_state:
+    name: dedup_state

@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dedup-cleaner"
+version = "0.1.0"
+description = "Privacy-guarded, dry-run-first file de-duplicator + cleaner for NAS trees."
+readme = "dedup_cleaner/README.md"
+requires-python = ">=3.10"
+dependencies = ["cryptography>=42.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pytest-cov>=4.0"]
+
+[project.scripts]
+dedup_cleaner = "dedup_cleaner.cli:main"
+
+[tool.setuptools]
+packages = ["dedup_cleaner"]
+
+# --- test runner ---
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+    "--cov=dedup_cleaner",
+    "--cov-report=term-missing",
+    "--cov-fail-under=85",
+]
+
+# --- coverage ---
+[tool.coverage.run]
+source = ["dedup_cleaner"]
+omit = ["dedup_cleaner/__main__.py"]
+
+[tool.coverage.report]
+show_missing = true
