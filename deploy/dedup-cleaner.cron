@@ -1,0 +1,22 @@
+# ---------------------------------------------------------------------------
+# dedup_cleaner — weekly schedule (Monday 02:10), for the deploy box.
+#
+# This is a DOCUMENTATION template only. No real host names, paths, or users
+# go in this file (it is committed to a public repo). Paste the concrete line
+# into the deploy box's cron (user crontab or /etc/cron.d).
+#
+#   <deploy-user> = the unix account that runs docker on the box
+#   <PROJECT_DIR> = the directory that holds docker-compose.yml + .env
+#
+# user crontab (`crontab -e`), 5 fields + command  :
+#     10 2 * * 1  <PROJECT_DIR>/deploy/run-weekly.sh >/dev/null 2>&1
+#
+# /etc/cron.d/dedup-cleaner, field before command is the user:
+#     10 2 * * 1  <deploy-user>  <PROJECT_DIR>/deploy/run-weekly.sh >/dev/null 2>&1
+#              ^  ^^^^   ^  ^^^ ^
+#           minute hour  *  *  *   Mon (0=Sun)
+#
+# The job is READ-ONLY (DRY_RUN stays true in the project .env). It writes a
+# dated log under <PROJECT_DIR>/logs/ and keeps the 30 most recent. To review
+# the latest run later, just open the newest *.log there.
+# ---------------------------------------------------------------------------
