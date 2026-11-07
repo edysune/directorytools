@@ -67,3 +67,30 @@ def test_render_encrypted_masks_all_paths(tmp_path):
     text = render(cfg, rep, Redactor(True, key))
     assert "/kept/s.mkv" not in text
     assert "/src/s.mkv" not in text
+
+
+def test_main_env_encrypt_redacts_output(tmp_path, capsys, monkeypatch):
+    """REGRESSION (box leak): DEDUP_ENCRYPT_FILE_NAME=true in env — with NO explicit
+    --encrypt-file-name flag — must still redact raw names OUT of stdout.
+
+    Before the fix, the boolean flag had no env default, so the CLI built the
+    Redactor disabled and printed paths verbatim."""
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv("DEDUP_ENCRYPT_FILE_NAME", "true")
+    monkeypatch.setenv("DEDUP_SECRET_KEY", key)
+    monkeypatch.setenv("DEDUP_BAD_FILE_TYPES", ".part")
+    monkeypatch.setenv("DEDUP_STATE_DIR", str(tmp_path / "st"))
+    monkeypatch.delenv("DEDUP_PREFERRED", raising=False)
+    monkeypatch.delenv("DEDUP_IGNORE", raising=False)
+
+    distinctive = "SuperSecret_Scanned_Doc_2024_final"
+    d = tmp_path / "models"; d.mkdir()
+    (d / (distinctive + ".mp4")).write_bytes(b"z" * 16)
+    (d / (distinctive + ".mp4.part")).write_bytes(b"z" * 16)   # same name+size dup
+    (d / (distinctive + ".part")).write_bytes(b"q" * 4)        # a bad-type file
+
+    rc = main(["--root", str(tmp_path)])   # no --encrypt-file-name flag; env drives it
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert distinctive not in out            # the raw name MUST be gone
+    assert "gAAAAA" in out                   # Fernet token prefix is present instead

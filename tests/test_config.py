@@ -69,3 +69,48 @@ def test_load_env_file_missing_path_is_noop(monkeypatch, tmp_path):
     _load_env_file(str(tmp_path / "does-not-exist.env"))
     import os
     assert "DEDUP_MAX_CHANGES" not in os.environ
+
+
+def _clear_dedup_bool_environ(monkeypatch) -> None:
+    for var in ("DEDUP_ENCRYPT_FILE_NAME", "DEDUP_HASH_CHECK",
+                "DEDUP_CORRUPTION_CHECK", "DEDUP_ALLOW_DELETE"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_bool_flags_off_by_default(monkeypatch):
+    """No env, no CLI flag -> every opt-in boolean is False (safe default)."""
+    _clear_dedup_bool_environ(monkeypatch)
+    c = from_args(["--root", "/r"])
+    assert c.encrypt_file_name is False
+    assert c.hash_check is False
+    assert c.corruption_check is False
+    assert c.allow_delete is False
+    assert c.deletion_enabled() is False
+
+
+def test_encrypt_flag_reads_env(monkeypatch):
+    """DEDUP_ENCRYPT_FILE_NAME=true in env must enable the redactor via from_args."""
+    _clear_dedup_bool_environ(monkeypatch)
+    monkeypatch.setenv("DEDUP_ENCRYPT_FILE_NAME", "true")
+    c = from_args(["--root", "/r"])
+    assert c.encrypt_file_name is True
+
+
+def test_hash_corruption_and_delete_read_env(monkeypatch):
+    _clear_dedup_bool_environ(monkeypatch)
+    monkeypatch.setenv("DEDUP_HASH_CHECK", "true")
+    monkeypatch.setenv("DEDUP_CORRUPTION_CHECK", "true")
+    c = from_args(["--root", "/r"])
+    assert c.hash_check is True
+    assert c.corruption_check is True
+    # allow-delete stays off even when the other opt-ins are on
+    assert c.allow_delete is False
+    assert c.deletion_enabled() is False
+
+
+def test_cli_flag_still_overrides_env(monkeypatch):
+    """Explicit --encrypt-file-name works even if env is false (flag = opt-in)."""
+    _clear_dedup_bool_environ(monkeypatch)
+    monkeypatch.setenv("DEDUP_ENCRYPT_FILE_NAME", "false")
+    c = from_args(["--root", "/r", "--encrypt-file-name"])
+    assert c.encrypt_file_name is True

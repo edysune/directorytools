@@ -122,12 +122,16 @@ def from_args(argv=None) -> Config:
     ap.add_argument("--dry-off", dest="dry_run_off", action="store_true",
                     help="explicitly disable dry-run (still needs --allow-delete)")
     ap.add_argument("--allow-delete", action="store_true",
+                    default=_b(os.environ.get("DEDUP_ALLOW_DELETE", "false")),
                     help="master switch that actually permits deletion")
     ap.add_argument("--hash-check", action="store_true",
+                    default=_b(os.environ.get("DEDUP_HASH_CHECK", "false")),
                     help="confirm name+size dups by SHA-256 byte equality")
     ap.add_argument("--corruption-check", action="store_true",
+                    default=_b(os.environ.get("DEDUP_CORRUPTION_CHECK", "false")),
                     help="0-byte + (optional) media probe; persists state CSV")
     ap.add_argument("--encrypt-file-name", action="store_true",
+                    default=_b(os.environ.get("DEDUP_ENCRYPT_FILE_NAME", "false")),
                     help="redact file names in logs/CSV; fails fast w/o key")
     ap.add_argument("--bad-file-types", type=str,
                     default=os.environ.get("DEDUP_BAD_FILE_TYPES", ""),
