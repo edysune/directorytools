@@ -1,4 +1,59 @@
-# ignore ALL json files in tools
+# ============================================================
+#  Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# ============================================================
+#  Tests / coverage
+# ============================================================
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+*.cover
+
+# ============================================================
+#  Environments / secrets  —  NEVER commit these
+#  (`.env` holds the real NAS root + key; `.env.example` is
+#   the only env file that is checked in as the "pull" template)
+# ============================================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.token
+
+# ============================================================
+#  Project outputs / generated data
+# ============================================================
+results/
 tools/*.json
-results
-tools/__pycache__
+tools/output/
+tools/video_audio_scripts/output/
+
+# ============================================================
+#  dedup_cleaner runtime state (real paths + hashes)
+# ============================================================
+*.dedup.csv
+dedup_state*.csv
+tools/dedup_cleaner/state/
+
+# ============================================================
+#  IDE / OS
+# ============================================================
+.idea/
+.vscode/
+*.swp
+.DS_Store
+.spyderproject
+.spyproject

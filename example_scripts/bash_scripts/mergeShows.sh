@@ -1,25 +1,25 @@
 #!/bin/sh
 
 echo "***************************************** MERGING ANIME (PRIMARY) *****************************************"
-./executeRemoteMerge.sh "/mnt/A14002/plex/anime_a" "/mnt/A14002/plex/anime_a"
+./executeRemoteMerge.sh "/mnt/EXAMPLE/plex/anime_a" "/mnt/EXAMPLE/plex/anime_a"
 
 echo "***************************************** MERGING ANIME (SECONDARY) *****************************************"
-./executeRemoteMerge.sh "/mnt/A16000/plex/anime_b" "/mnt/A16000/plex/anime_b"
+./executeRemoteMerge.sh "/mnt/EXAMPLE/plex/anime_b" "/mnt/EXAMPLE/plex/anime_b"
 
 echo "************************************* TV SHOWS (PRIMARY) *****************************************"
-./executeRemoteMerge.sh "/mnt/A14001/plex/tv_shows_a" "/mnt/A14001/plex/tv_shows_a"
+./executeRemoteMerge.sh "/mnt/EXAMPLE/plex/tv_shows_a" "/mnt/EXAMPLE/plex/tv_shows_a"
 
 echo "***************************************** MERGING TV SHOWS (SECONDARY) *****************************************"
-./executeRemoteMerge.sh "/mnt/A18000/plex/tv_shows_b" "/mnt/A18000/plex/tv_shows_b"
+./executeRemoteMerge.sh "/mnt/EXAMPLE/plex/tv_shows_b" "/mnt/EXAMPLE/plex/tv_shows_b"
 
 echo "***************************************** MERGING ANIMATION *****************************************"
-./executeRemoteMerge.sh "/mnt/A18000/plex/animation" "/mnt/A18000/plex/animation"
+./executeRemoteMerge.sh "/mnt/EXAMPLE/plex/animation" "/mnt/EXAMPLE/plex/animation"
 
 echo "***************************************** MERGING EXERCISE VIDS *****************************************"
-./executeRemoteMerge.sh "/mnt/A16000/plex/exercise_videos" "/mnt/A16000/plex/exercise_videos"
+./executeRemoteMerge.sh "/mnt/EXAMPLE/plex/exercise_videos" "/mnt/EXAMPLE/plex/exercise_videos"
 
 echo "***************************************** MERGING FOREIGN TV SHOWS *****************************************"
-./executeRemoteMerge.sh "/mnt/A16000/plex/foreign_tv_shows" "/mnt/A16000/plex/foreign_tv_shows"
+./executeRemoteMerge.sh "/mnt/EXAMPLE/plex/foreign_tv_shows" "/mnt/EXAMPLE/plex/foreign_tv_shows"
 
 echo "***************************************** REALITY TV SHOWS *****************************************"
-./executeRemoteMerge.sh "/mnt/A16000/plex/reality_tv" "/mnt/A16000/plex/reality_tv"
+./executeRemoteMerge.sh "/mnt/EXAMPLE/plex/reality_tv" "/mnt/EXAMPLE/plex/reality_tv"
