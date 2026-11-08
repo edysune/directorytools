@@ -17,11 +17,19 @@ from .models import RunReport
 
 def apply(cfg: Config, report: RunReport, redactor: Redactor, log=print) -> List[str]:
     """Execute any deletions. Returns a list of human lines of what actually
-    happened (empty in dry-run / not-enabled)."""
+    happened (empty in dry-run / not-enabled).
+
+    Scope: when ``cfg.delete_bad_only`` is set, ONLY ``REMOVE_BAD_TYPE``
+    actions execute; dedup-pair deletions (DEDUP_KEEP) are left untouched
+    even though deletion is enabled. The master gate still applies either
+    way: nothing is removed unless both dry_run is off and allow_delete is on.
+    """
     performed: List[str] = []
     if not cfg.deletion_enabled():
         return performed
     for a in report.actions:
+        if cfg.delete_bad_only and a.kind != "REMOVE_BAD_TYPE":
+            continue
         for f in a.removed:
             try:
                 os.remove(f.path)

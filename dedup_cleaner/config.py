@@ -31,6 +31,7 @@ class Config:
     # behaviour
     dry_run: bool = True
     allow_delete: bool = False
+    delete_bad_only: bool = False
     hash_check: bool = False
     corruption_check: bool = False
     encrypt_file_name: bool = False
@@ -95,6 +96,7 @@ def from_env() -> Config:
         excluded=paths.parse_list(env.get("DEDUP_IGNORE", "")),
         dry_run=_b(env.get("DEDUP_DRY_RUN", "true")),
         allow_delete=_b(env.get("DEDUP_ALLOW_DELETE", "false")),
+        delete_bad_only=_b(env.get("DEDUP_DELETE_BAD_ONLY", "false")),
         hash_check=_b(env.get("DEDUP_HASH_CHECK", "false")),
         corruption_check=_b(env.get("DEDUP_CORRUPTION_CHECK", "false")),
         encrypt_file_name=_b(env.get("DEDUP_ENCRYPT_FILE_NAME", "false")),
@@ -124,6 +126,10 @@ def from_args(argv=None) -> Config:
     ap.add_argument("--allow-delete", action="store_true",
                     default=_b(os.environ.get("DEDUP_ALLOW_DELETE", "false")),
                     help="master switch that actually permits deletion")
+    ap.add_argument("--delete-bad-only", action="store_true",
+                    default=_b(os.environ.get("DEDUP_DELETE_BAD_ONLY", "false")),
+                    help="with deletion enabled, only act on bad-file-type "
+                         "issues (e.g. .part); never delete dedup-pair members")
     ap.add_argument("--hash-check", action="store_true",
                     default=_b(os.environ.get("DEDUP_HASH_CHECK", "false")),
                     help="confirm name+size dups by SHA-256 byte equality")
@@ -156,6 +162,7 @@ def from_args(argv=None) -> Config:
         excluded=paths.parse_list(a.ignore),
         dry_run=bool(dry),
         allow_delete=bool(a.allow_delete),
+        delete_bad_only=bool(a.delete_bad_only),
         hash_check=bool(a.hash_check),
         corruption_check=bool(a.corruption_check),
         encrypt_file_name=bool(a.encrypt_file_name),
