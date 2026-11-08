@@ -1,12 +1,21 @@
 """Pure dedup rule engine.
 
-The three preference cases the tool must honour (spec, verbatim intent):
+Preference semantics (spec + ranked tie-breaker):
 
-* **one preferred + one-or-more non-preferred**  -> keep the preferred member,
-  delete the non-preferred duplicate(s).  (preferred never deleted)
-* **all members under preferred paths**          -> SKIP (all equal weight)
-* **no member under a preferred path**           -> SKIP (never delete on
+* The ``DEDUP_PREFERRED`` list is ORDERED: earlier entries outrank later ones.
+  A file is assigned the rank of the first list root it falls under (lower is
+  stronger); not under any root == non-preferred (rank below every entry).
+* **no member preferred**                       -> SKIP (never delete on
   ambiguity)
+* **multiple members preferred:**
+  - exactly one holds the TOP rank              -> that member is the keeper;
+    every other member (lower-ranked preferred AND non-preferred) is the
+    removal candidate.  A copy in a weaker preferred dir loses to the copy in
+    the stronger one (e.g. Models keeps over Categories).
+  - two-or-more members share the TOP rank      -> SKIP (tied at equal
+    weight; still counted toward the cap).
+* Invariant: a file is never removed in favour of an equal- or lower-ranked
+  one, and a non-preferred file always loses to any preferred file.
 
 A group is "consumed" as soon as it produces a decision, so a (name, size)
 pair is never re-evaluated within the same run, and the ``max_changes`` cap
@@ -47,22 +56,30 @@ def find_bad_type_files(files: Sequence[FileInfo],
 
 def resolve_group(members: Sequence[FileInfo],
                   preferred: Iterable[str]) -> Tuple[bool, Action]:
-    """Prefer-then-keep decision for one (name, size) group (len>=2), pure."""
-    pref = [m for m in members if paths.is_preferred(m.path, preferred)]
-    nonpref = [m for m in members if not paths.is_preferred(m.path, preferred)]
-    if pref and nonpref:
-        return True, Action(
-            kind="DEDUP_KEEP", resolved=True, keeper=pref[0], removed=nonpref,
-            reason="preferred path wins; non-preferred duplicate(s) removed",
-        )
-    if pref:
+    """Ranked keep/drop decision for one (name, size) group (len>=2), pure.
+
+    The preferred list is an ORDER of strength (see module docstring). Top
+    rank wins if unique; a top-rank tie is a SKIP.
+    """
+    ranked = [(paths.preferred_rank(m.path, preferred), m) for m in members]
+    pref = [(rk, m) for rk, m in ranked if rk is not None]
+    if not pref:
         return False, Action(
-            kind="DEDUP_SKIP", resolved=False, kept=pref,  # type: ignore[arg-type]
-            reason="all members under preferred paths; equal weight, not deletable",
+            kind="DEDUP_SKIP", resolved=False, kept=list(members),  # type: ignore[arg-type]
+            reason="no member under a preferred path; ambiguity not resolved",
         )
-    return False, Action(
-        kind="DEDUP_SKIP", resolved=False, kept=members,  # type: ignore[arg-type]
-        reason="no member under a preferred path; ambiguity not resolved",
+    best = min(rk for rk, _ in pref)
+    best_members = [m for rk, m in ranked if rk == best]
+    if len(best_members) > 1:
+        return False, Action(
+            kind="DEDUP_SKIP", resolved=False, kept=list(members),  # type: ignore[arg-type]
+            reason="multiple members share the top-preferred rank; tied, not deletable",
+        )
+    keeper = best_members[0]
+    removed = [m for m in members if m.path != keeper.path]
+    return True, Action(
+        kind="DEDUP_KEEP", resolved=True, keeper=keeper, removed=removed,
+        reason="top-ranked preferred path keeps; lower-ranked/non-preferred duplicate(s) removed",
     )
 
 

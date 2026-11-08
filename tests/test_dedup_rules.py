@@ -16,7 +16,60 @@ def test_one_preferred_is_actionable():
 def test_all_preferred_is_skip():
     res, act = D.resolve_group([F("/mnt/a/v.mkv"), F("/mnt/a/sub/v.mkv")], ["/mnt/a"])
     assert not res and act.kind == "DEDUP_SKIP"
-    assert act.removed == []                    # preferred is never deleted
+    assert act.removed == []                    # same-rank tie: never removed
+
+
+def test_ranked_top_pref_beats_lower_ranked():
+    """Models (rank 0) keeps over Categories (rank 1) — the tie-breaker."""
+    res, act = D.resolve_group(
+        [F("/mnt/categories/v.mkv"), F("/mnt/models/v.mkv")],
+        ["/mnt/models", "/mnt/categories"])
+    assert res and act.kind == "DEDUP_KEEP"
+    assert act.keeper.path == "/mnt/models/v.mkv"
+    assert [x.path for x in act.removed] == ["/mnt/categories/v.mkv"]
+
+
+def test_ranked_keeper_beats_lower_ranked_AND_nonpref():
+    res, act = D.resolve_group(
+        [F("/mnt/models/a/x.mkv"), F("/mnt/models/b/x.mkv"), F("/mnt/other/x.mkv")],
+        ["/mnt/models/a", "/mnt/models/b"])
+    assert res and act.keeper.path == "/mnt/models/a/x.mkv"
+    assert sorted(x.path for x in act.removed) == \
+        sorted(["/mnt/models/b/x.mkv", "/mnt/other/x.mkv"])
+
+
+def test_tied_top_rank_is_skip_even_with_nonpref_present():
+    # two members share rank 0 -> tied at top -> SKIP all (conservative),
+    # even though a non-preferred copy is also in the group.
+    res, act = D.resolve_group(
+        [F("/mnt/a/x.mkv"), F("/mnt/a/sub/x.mkv"), F("/mnt/c/x.mkv")],
+        ["/mnt/a", "/mnt/b"])
+    assert not res and act.kind == "DEDUP_SKIP"
+    assert act.removed == []
+
+
+def test_rank_result_independent_of_member_order():
+    res, act = D.resolve_group(
+        [F("/mnt/models/v.mkv"), F("/mnt/categories/v.mkv")],
+        ["/mnt/models", "/mnt/categories"])
+    assert res and act.keeper.path == "/mnt/models/v.mkv"
+
+
+def test_nonpref_always_loses_to_any_pref():
+    res, act = D.resolve_group(
+        [F("/mnt/zz/v.mkv"), F("/mnt/categories/v.mkv")],
+        ["/mnt/models", "/mnt/categories"])  # categories is rank 1 but still beats nonpref
+    assert res and act.keeper.path == "/mnt/categories/v.mkv"
+    assert [x.path for x in act.removed] == ["/mnt/zz/v.mkv"]
+
+
+def test_preferred_rank_first_match_wins():
+    from dedup_cleaner import paths as P
+    # list order encodes strength — first match in the list wins (not longest)
+    assert P.preferred_rank("/mnt/models/b/x", ["/mnt/models", "/mnt/models/b"]) == 0
+    assert P.preferred_rank("/mnt/models/b/x", ["/mnt/models/b", "/mnt/models"]) == 0
+    assert P.preferred_rank("/mnt/other/x", ["/mnt/models", "/mnt/models/b"]) is None
+    assert P.preferred_rank("/mnt/a/x", []) is None
 
 
 def test_none_preferred_is_skip():

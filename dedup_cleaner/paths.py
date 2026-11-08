@@ -7,7 +7,7 @@ false positives).
 """
 
 from __future__ import annotations
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 import os
 import posixpath
 
@@ -46,11 +46,21 @@ def is_excluded(path: str, excluded: Iterable[str]) -> bool:
 
 def is_preferred(path: str, preferred: Iterable[str]) -> bool:
     """True if ``path`` is under (or equals) any preferred root (inclusive)."""
+    return preferred_rank(path, preferred) is not None
+
+
+def preferred_rank(path: str, preferred: Iterable[str]) -> Optional[int]:
+    """Rank of ``path`` in an *ordered* preferred list.
+
+    Returns the index of the FIRST list entry the path falls under (or equals),
+    so lower index == stronger preference. ``None`` if the path is not under
+    any preferred root (i.e. non-preferred, and ranked below every entry).
+    """
     np = normalize(path)
     if not preferred:
-        return False
-    for root in preferred:
+        return None
+    for i, root in enumerate(preferred):
         nr = normalize(root).rstrip("/")
         if np == nr or np.startswith(nr + "/"):
-            return True
-    return False
+            return i
+    return None

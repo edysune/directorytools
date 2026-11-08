@@ -26,11 +26,15 @@ bug in the decision logic. To actually delete, you must explicitly set
 
 Additional safeguards:
 
-- **Preferred paths are never deleted.** A file under a preferred path wins a
-  duplicate tie; the *other* copy is the one targeted (if ever resolved).
-- **Ambiguity = skip.** If neither copy is preferred, *or both are* preferred
-  (they're equal by weight), the group is skipped — nothing is removed, but it
-  is still counted toward the `max_changes` cap.
+- **Preferred paths are ranked, and the stronger copy keeps.** The
+  `DEDUP_PREFERRED` list is an order of strength: e.g. `Models` before
+  `Categories` means the `Models` copy wins the tie and the `Categories` copy
+  becomes the removal candidate. A non-preferred copy always loses to any
+  preferred copy. A file is never removed in favour of an equal- or
+  lower-ranked one.
+- **Ambiguity = skip.** If no copy is preferred, *or several copies share the
+  top rank* (tied at equal weight), the group is skipped — nothing is removed,
+  but it is still counted toward the `max_changes` cap.
 - **Bad file types** (e.g. `.part`) are flagged and targeted regardless of
   preference; still dry-run-gated.
 - **`max_changes` cap** (default 10) stops the scan early once that many
