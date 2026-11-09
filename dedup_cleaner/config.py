@@ -37,6 +37,10 @@ class Config:
     encrypt_file_name: bool = False
     bad_file_types: List[str] = field(default_factory=list)
     max_changes: int = 10
+    # wall-clock budget in seconds (0 = none). The run aborts cleanly at this
+    # point (partial results, state saved if reached, NO deletions — the fix
+    # stage always runs last).
+    time_budget_s: int = 0
     # storage / privacy
     state_dir: str = "/volume/dedup/state"
     secret_key: str = ""
@@ -105,6 +109,7 @@ def from_env() -> Config:
         state_dir=env.get("DEDUP_STATE_DIR", "/volume/dedup/state"),
         secret_key=env.get("DEDUP_SECRET_KEY", ""),
         log_level=env.get("DEDUP_LOG_LEVEL", "INFO").upper(),
+        time_budget_s=int(env.get("DEDUP_TIME_BUDGET_S", "0")),
     )
 
 
@@ -150,6 +155,11 @@ def from_args(argv=None) -> Config:
                     default=os.environ.get("DEDUP_SECRET_KEY", ""))
     ap.add_argument("--log-level", type=str,
                     default=os.environ.get("DEDUP_LOG_LEVEL", "INFO").upper())
+    ap.add_argument("--time-budget-s", dest="time_budget_s", type=int,
+                    default=int(os.environ.get("DEDUP_TIME_BUDGET_S", "0")),
+                    help="wall-clock budget in seconds; on expiry the run "
+                         "saves state, reports partial results, and exits "
+                         "without deleting anything (0 = no limit)")
     a = ap.parse_args(argv)
 
     # dry-run default true; --dry-off explicitly turns it off.
@@ -171,4 +181,5 @@ def from_args(argv=None) -> Config:
         state_dir=a.state_dir,
         secret_key=a.secret_key,
         log_level=a.log_level,
+        time_budget_s=int(a.time_budget_s),
     )

@@ -58,6 +58,7 @@ class RunReport:
     warnings: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
     stopped_by_cap: bool = False
+    time_budget_hit: bool = False
 
     # --- tallies (computed from ``actions``) ---
     def resolved_count(self) -> int:

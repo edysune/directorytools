@@ -30,6 +30,11 @@ services:
     environment:
       DEDUP_DRY_RUN: "true"
       DEDUP_ALLOW_DELETE: "false"
+      # In-container wall-clock backstop: on expiry the job saves state and
+      # exits 0 without deleting. Keep it BELOW DEDUP_RUN_TIMEOUT in the
+      # host wrapper so the container always finishes itself first and the
+      # host `timeout` never has to act on a live client (no orphans).
+      DEDUP_TIME_BUDGET_S: "3300"
 
     volumes:
       # The scanned tree: ${DEDUP_ROOT} (your host path, from .env) is

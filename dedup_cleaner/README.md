@@ -40,6 +40,11 @@ Additional safeguards:
 - **`max_changes` cap** (default 10) stops the scan early once that many
   issues (resolved *or* ambiguous) are identified, so it never crawls terabytes
   before it acts.
+- **Wall-clock budget** (`DEDUP_TIME_BUDGET_S`, default `0` = unlimited).
+  When set, a hard second backstop (in addition to `max_changes`): if a run
+  exceeds the budget the process saves its state, emits a partial report, and
+  exits without deleting anything. It exists for network (CIFS/NFS) roots
+  where a hung read could otherwise stall the container indefinitely.
 - **No real values in code.** Every sensitive value (roots, preferred/ignore
   lists, the Fernet key, the state dir) comes from `.env` (git-ignored).
   Only `.env.example` is checked in, and it uses placeholders.

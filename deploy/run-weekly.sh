@@ -21,7 +21,9 @@ LOG="$LOG_DIR/${STAMP}_dedup_cleaner.log"
 
 echo "=== dedup_cleaner run: $STAMP (project: $PROJECT_DIR) ===" | tee -a "$LOG"
 
-# Bounded by DEDUP_MAX_CHANGES in the project .env; hard wall-clock backstop.
+# Bounded three ways: DEDUP_MAX_CHANGES (work), DEDUP_TIME_BUDGET_S (in-
+# container wall clock: clean self-exit + state save), and the host `timeout`
+# (last resort; kept LONGER than the budget so it never has to fire).
 timeout "${DEDUP_RUN_TIMEOUT:-3600}" docker compose run --rm --no-deps dedup_cleaner \
   >> "$LOG" 2>&1
 rc=$?
