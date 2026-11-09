@@ -20,11 +20,18 @@ from .state import State
 
 
 def _hasher_for(report: RunReport):
-    """Return ``path -> sha256`` that increments ``report.hashed_files``."""
+    """Return ``path -> sha256`` that hashes each file at most ONCE per run.
+
+    A file may be requested by both the dedup confirmation pass and the state
+    cache loop; without a memo it would be read twice from (possibly network)
+    storage. ``report.hashed_files`` counts real I/O, so it increments once.
+    """
+    memo: dict = {}
     def hasher(path: str) -> str:
-        h = hashing.sha256_file(path)
-        report.hashed_files += 1
-        return h
+        if path not in memo:
+            memo[path] = hashing.sha256_file(path)
+            report.hashed_files += 1
+        return memo[path]
     return hasher
 
 
@@ -96,8 +103,18 @@ def run(cfg: Config) -> "tuple[RunReport, State|None, List[str]]":
     # 7) state: persist (new/changed) + prune stale dirs + save
     if use_state and st is not None:
         if cfg.hash_check and hasher is not None:
+            # Hash cost is bounded to files that are ACTUAL duplicate
+            # candidates (same name+size as >=1 other). Hashing the whole
+            # tree would be multi-TB of pointless I/O on the weekly run —
+            # the state cache only matters for files we might dedup.
+            candidate_ids = {
+                id(f)
+                for members in by_ns.values()
+                if len(members) >= 2
+                for f in members
+            }
             for f in files:
-                if st.should_track_size(f):
+                if id(f) in candidate_ids and st.should_track_size(f):
                     st.process(f, hasher)
         else:
             for f in files:
