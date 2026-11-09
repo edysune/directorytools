@@ -1,5 +1,6 @@
 import hashlib
 import os
+import pytest
 from dedup_cleaner import hashing
 from dedup_cleaner.models import FileInfo
 
@@ -32,7 +33,7 @@ def test_empty_string_digest_never_confirms_nonempty(tmp_path, monkeypatch):
     open(c, "wb").write(b"OTHER-2")
 
     empty = hashing._EMPTY_SHA
-    def fake(path: str) -> str:
+    def fake(path, *a, **k) -> str:
         return empty  # broken share: every read() returns EOF
 
     monkeypatch.setattr(hashing, "sha256_file", fake)
@@ -42,7 +43,7 @@ def test_empty_string_digest_never_confirms_nonempty(tmp_path, monkeypatch):
     # keeper reads fine, but a victim's read is bogus -> that victim is dropped
     import hashlib as _h
     real_a = _h.sha256(b"REAL-KEEPER").hexdigest()
-    def fake2(path: str) -> str:
+    def fake2(path, *a, **k) -> str:
         return real_a if path == a else empty
     monkeypatch.setattr(hashing, "sha256_file", fake2)
     assert hashing.confirm_equal(F(a), [F(b), F(c)]) == []          # victims bogus
@@ -55,3 +56,42 @@ def test_two_genuinely_empty_files_still_confirm(tmp_path):
     open(a, "wb").close(); open(b, "wb").close()
     out = hashing.confirm_equal(F(a), [F(b)])
     assert {o.path for o in out} == {b}
+
+
+def test_sha256_file_early_eof_raises_untrusted(tmp_path, monkeypatch):
+    """A read that EOFs BEFORE the known size = broken/hanging share; the
+    partial digest must NOT be returned (it could fake a match)."""
+    p = tmp_path / "f.bin"
+    p.write_bytes(b"x" * 16)
+    class _FakeFH:
+        def __init__(self): self._first = True
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self, n):
+            if self._first:
+                self._first = False
+                return b"y" * 8            # 8 bytes then EOF, but file is 16
+            return b""
+    monkeypatch.setattr("builtins.open", lambda *a, **k: _FakeFH())
+    monkeypatch.setattr(hashing.time, "sleep", lambda s: None)
+    with pytest.raises(hashing.HashReadError):
+        hashing.sha256_file(str(p), expected_size=16)
+
+
+def test_sha256_file_full_read_with_expected_size_ok(tmp_path):
+    p = tmp_path / "g.bin"
+    data = os.urandom(5000)
+    p.write_bytes(data)
+    assert hashing.sha256_file(str(p), expected_size=len(data)) == hashlib.sha256(data).hexdigest()
+
+
+def test_confirm_equal_never_confirms_early_eof_victim(tmp_path, monkeypatch):
+    a = str(tmp_path / "a"); b = str(tmp_path / "b")
+    open(a, "wb").write(b"REAL-KEEPER"); open(b, "wb").write(b"OTHER")
+    def fake(path, *args, **kwargs):
+        if path == b:
+            raise hashing.HashReadError("early EOF after 0/5")
+        with open(path, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+    monkeypatch.setattr(hashing, "sha256_file", fake)
+    assert hashing.confirm_equal(F(a), [F(b)]) == []
