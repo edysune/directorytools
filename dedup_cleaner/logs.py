@@ -10,11 +10,43 @@ available, construction raises ``ConfigKeyError`` and the CLI exits non-zero
 """
 
 from __future__ import annotations
+import sys
+import time
 from cryptography.fernet import Fernet, InvalidToken
 
 
 class ConfigKeyError(RuntimeError):
     """Raised when the privacy key is missing/invalid but required."""
+
+
+class StageLog:
+    """Streaming stage logger: one line per milestone, flushed immediately.
+
+    The weekly job runs for tens of minutes on CIFS; without live output an
+    outer timeout kill looks identical to a hang. Every line is timestamped
+    plus elapsed-seconds so a post-mortem can attribute time to a phase.
+    Paths entering these lines MUST already be redacted by the caller.
+    """
+
+    def __init__(self, stream=None, enabled: bool = True):
+        self._t0 = time.monotonic()
+        self._stream = stream if stream is not None else sys.stdout
+        self.enabled = enabled
+
+    def stage(self, msg: str) -> None:
+        if not self.enabled:
+            return
+        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+        try:
+            self._stream.write(
+                f"[dedup_cleaner {ts}Z +{time.monotonic() - self._t0:8.1f}s] {msg}\n")
+            self._stream.flush()
+        except Exception:  # logging must never be the thing that crashes a run
+            pass
+
+    @property
+    def elapsed(self) -> float:
+        return time.monotonic() - self._t0
 
 
 class Redactor:

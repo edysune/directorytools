@@ -69,6 +69,37 @@ def _broken(size: int, digest: str) -> bool:
     return size > 0 and digest == _EMPTY_SHA
 
 
+def confirm_with(hasher) -> "callable":
+    """Build a ``(keeper, victims) -> confirmed victims`` closer over ONE hasher.
+
+    ``hasher(path, size)`` must raise ``OSError`` on unreadable/early-EOF.
+    Sharing ONE memoized hasher between the confirmation pass and the state
+    pass is the point: without it, every candidate file is read twice off the
+    network share (once here, once in state tracking).
+    """
+
+    def confirm(keeper: FileInfo, victims: Sequence[FileInfo]) -> List[FileInfo]:
+        try:
+            k_sha = hasher(keeper.path, keeper.size)
+        except OSError:
+            return []
+        if _broken(keeper.size, k_sha):
+            return []
+        out: List[FileInfo] = []
+        for v in victims:
+            try:
+                digest = hasher(v.path, v.size)
+            except OSError:
+                continue
+            if _broken(v.size, digest):
+                continue
+            if digest == k_sha:
+                out.append(v)
+        return out
+
+    return confirm
+
+
 def confirm_equal(keeper: FileInfo, victims: Sequence[FileInfo]) -> List[FileInfo]:
     """Return the subset of ``victims`` whose SHA-256 equals ``keeper``'s.
 

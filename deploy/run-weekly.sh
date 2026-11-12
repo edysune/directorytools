@@ -22,9 +22,12 @@ LOG="$LOG_DIR/${STAMP}_dedup_cleaner.log"
 echo "=== dedup_cleaner run: $STAMP (project: $PROJECT_DIR) ===" | tee -a "$LOG"
 
 # Bounded three ways: DEDUP_MAX_CHANGES (work), DEDUP_TIME_BUDGET_S (in-
-# container wall clock: clean self-exit + state save), and the host `timeout`
-# (last resort; kept LONGER than the budget so it never has to fire).
-timeout "${DEDUP_RUN_TIMEOUT:-3600}" docker compose run --rm --no-deps dedup_cleaner \
+# container wall clock: clean self-exit + state save + partial report), and
+# the host `timeout` (last resort; kept LONGER than the budget so it never
+# has to fire on a live run — when IT fires, the log has no end-report and
+# we learn nothing, which is exactly the 2026-11-11 incident).
+# Outer backstop = the pinned in-container budget (4h) + 10min grace.
+timeout "${DEDUP_RUN_TIMEOUT:-15000}" docker compose run --rm --no-deps dedup_cleaner \
   >> "$LOG" 2>&1
 rc=$?
 if [ "$rc" -ne 0 ]; then

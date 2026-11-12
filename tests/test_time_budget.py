@@ -11,6 +11,7 @@ import time
 
 from dedup_cleaner import cli, hashing, scanner
 from dedup_cleaner.config import from_env
+from dedup_cleaner.logs import Redactor, StageLog
 from dedup_cleaner.models import RunReport
 
 
@@ -25,7 +26,7 @@ def test_hasher_threads_size_into_sha256_file(tmp_path, monkeypatch):
 
     monkeypatch.setattr(hashing, "sha256_file", fake)
     rep = RunReport()
-    h = cli._hasher_for(rep)
+    h = cli._hasher_for(rep, Redactor(False, ""), StageLog(enabled=False))
     p = str(tmp_path / "a.bin")
     assert h(p, 111) == "ab" * 32
     assert h(p, 111) == "ab" * 32          # memo hit
