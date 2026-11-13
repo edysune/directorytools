@@ -4,10 +4,12 @@
 # Self-locating: uses whatever directory it lives in as the compose project,
 # so the same script works in the repo (deploy/) and on the deploy box.
 #
-# Safe-by-default: it runs the container as defined by docker-compose.yml,
-# which pins DRY_RUN=true and (by default) no deletion. This script adds NO
-# deletion capability — to ever enable deletion you must edit the project's
-# compose/.env AND re-deploy; the flag stays off here.
+# Mode comes from the project's compose/.env on the deploy box — NOT from this
+# script. Current live setting on .236: DEDUP_DRY_RUN=false +
+# DEDUP_ALLOW_DELETE=true (hash-confirmed duplicate copies ARE deleted;
+# see the 2026-11-12 first live run). This script itself adds NO deletion
+# logic — flipping flags in /docker/dedup-cleaner/.env changes what the NEXT
+# scheduled run does.
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

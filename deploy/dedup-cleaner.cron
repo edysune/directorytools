@@ -16,7 +16,10 @@
 #              ^  ^^^^   ^  ^^^ ^
 #           minute hour  *  *  *   Mon (0=Sun)
 #
-# The job is READ-ONLY (DRY_RUN stays true in the project .env). It writes a
-# dated log under <PROJECT_DIR>/logs/ and keeps the 30 most recent. To review
-# the latest run later, just open the newest *.log there.
+# The job's MODE comes from the deployed .env, not this schedule: on the live
+# box it is a LIVE pass (dry_run=false, allow_delete=true — hash-confirmed
+# duplicate copies ARE deleted; rank-tie groups stay undeleted by design).
+# It writes a dated log under <PROJECT_DIR>/logs/ and keeps the 30 most
+# recent. To review the latest run later, just open the newest *.log there.
+# All filenames inside those logs are Fernet-encrypted tokens by design.
 # ---------------------------------------------------------------------------
